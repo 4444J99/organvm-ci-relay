@@ -1,0 +1,336 @@
+name: "Relay: process-environment enactment"
+
+run-name: >-
+  relay ${{ inputs.profile }} @ ${{ inputs.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Audited public target
+        required: true
+        type: choice
+        options:
+          - organvm/process-environment-enactment
+      sha:
+        description: Full 40-character lowercase commit SHA
+        required: true
+        type: string
+      profile:
+        description: Relay-owned validation profile
+        required: true
+        type: choice
+        options:
+          - process-environment-enactment-v1
+
+# No target-repository credential is available to test jobs. Artifact transport
+# uses GitHub's per-job Actions runtime token rather than repository permissions.
+permissions: {}
+
+concurrency:
+  group: relay-${{ inputs.profile }}-${{ inputs.sha }}
+  cancel-in-progress: true
+
+jobs:
+  authorize:
+    name: Authorize dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      owner: ${{ steps.allow.outputs.owner }}
+      repository: ${{ steps.allow.outputs.repository }}
+    steps:
+      - id: allow
+        name: Enforce target, profile, and SHA allowlists
+        shell: bash
+        env:
+          TARGET_REPO: ${{ inputs.target }}
+          TARGET_SHA: ${{ inputs.sha }}
+          TARGET_PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_REPO" == "organvm/process-environment-enactment" ]]
+          [[ "$TARGET_PROFILE" == "process-environment-enactment-v1" ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TARGET_SHA" == "ffebb6fa1020098e18020f6a4a845cf933c0df3c" ]]
+          printf 'owner=organvm\n' >> "$GITHUB_OUTPUT"
+          printf 'repository=process-environment-enactment\n' >> "$GITHUB_OUTPUT"
+
+  posix:
+    name: POSIX / ${{ matrix.os }}
+    needs: authorize
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - os: ubuntu-latest
+            receipt_label: ubuntu
+          - os: macos-latest
+            receipt_label: macos
+    env:
+      TARGET_REPO: organvm/process-environment-enactment
+      TARGET_SHA: ${{ inputs.sha }}
+      TARGET_PROFILE: process-environment-enactment-v1
+      RECEIPT_LABEL: ${{ matrix.receipt_label }}
+    steps:
+      - name: Fetch the allowlisted repository by exact SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir target
+          git -C target init
+          git -C target remote add origin \
+            https://github.com/organvm/process-environment-enactment.git
+          git -C target -c protocol.version=2 fetch \
+            --no-tags --depth=1 origin "$TARGET_SHA"
+          git -C target checkout --detach FETCH_HEAD
+          [[ "$(git -C target rev-parse HEAD)" == "$TARGET_SHA" ]]
+
+      - id: validate
+        name: Compile, execute, and assert POSIX behavior
+        continue-on-error: true
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -Wall -Wextra -pedantic -std=c99 \
+            posix-envp-enactment.c -o posix-envp-enactment
+
+          ./posix-envp-enactment seed-edge | tee posix-edge.txt
+          grep -Fx '000:some-other=values' posix-edge.txt
+          grep -Fx '001:NAME+some-other=value+values' posix-edge.txt
+          grep -Fx '002:=empty-name' posix-edge.txt
+          grep -Fx '003:noequals' posix-edge.txt
+          grep -Fx '004:name=value=with=equals' posix-edge.txt
+          grep -Fx '005:dup=one' posix-edge.txt
+          grep -Fx '006:dup=two' posix-edge.txt
+          grep -Fx '007:NAME=value' posix-edge.txt
+          if grep -F 'TAIL=x' posix-edge.txt; then exit 1; fi
+
+          ./posix-envp-enactment seed-basic replicate | tee posix-replicate.txt
+          diff -u <(printf '000:third=3\n001:first=1\n002:second=2\n') \
+            posix-replicate.txt
+
+          ./posix-envp-enactment seed-basic append | tee posix-append.txt
+          diff -u \
+            <(printf '000:third=3\n001:first=1\n002:second=2\n003:added=entry\n') \
+            posix-append.txt
+
+          ./posix-envp-enactment seed-basic omit | tee posix-omit.txt
+          diff -u <(printf '000:third=3\n001:second=2\n') posix-omit.txt
+
+          ./posix-envp-enactment seed-basic replace | tee posix-replace.txt
+          diff -u \
+            <(printf '000:third=3\n001:second=2\n002:first=replaced\n') \
+            posix-replace.txt
+
+          cat posix-edge.txt posix-replicate.txt posix-append.txt \
+            posix-omit.txt posix-replace.txt > posix-output.txt
+          shasum -a 256 posix-output.txt | tee posix-output.sha256
+
+      - name: Write POSIX receipt
+        if: always()
+        shell: bash
+        env:
+          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELAY_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const receipt = {
+            schema: 'organvm-ci-relay-receipt/v1',
+            target_repository: process.env.TARGET_REPO,
+            target_sha: process.env.TARGET_SHA,
+            profile: process.env.TARGET_PROFILE,
+            platform: process.env.RECEIPT_LABEL,
+            outcome: process.env.VALIDATION_OUTCOME,
+            relay_repository: process.env.RELAY_REPOSITORY,
+            run_id: process.env.RUN_ID,
+            run_attempt: process.env.RUN_ATTEMPT
+          };
+          fs.writeFileSync(
+            `target/receipt-${process.env.RECEIPT_LABEL}.json`,
+            JSON.stringify(receipt, null, 2) + '\n'
+          );
+          NODE
+
+      - name: Upload POSIX receipt and observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: receipt-${{ matrix.receipt_label }}
+          path: |
+            target/receipt-${{ matrix.receipt_label }}.json
+            target/posix-*.txt
+            target/posix-output.sha256
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Enforce POSIX result
+        if: steps.validate.outcome != 'success'
+        shell: bash
+        run: exit 1
+
+  windows:
+    name: Windows / windows-latest
+    needs: authorize
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      TARGET_REPO: organvm/process-environment-enactment
+      TARGET_SHA: ${{ inputs.sha }}
+      TARGET_PROFILE: process-environment-enactment-v1
+      RECEIPT_LABEL: windows
+    steps:
+      - name: Fetch the allowlisted repository by exact SHA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path target | Out-Null
+          git -C target init
+          git -C target remote add origin `
+            https://github.com/organvm/process-environment-enactment.git
+          git -C target -c protocol.version=2 fetch `
+            --no-tags --depth=1 origin $env:TARGET_SHA
+          git -C target checkout --detach FETCH_HEAD
+          $actual = git -C target rev-parse HEAD
+          if ($actual -cne $env:TARGET_SHA) {
+            throw "Fetched $actual instead of $env:TARGET_SHA"
+          }
+
+      - id: harness
+        name: Compile and execute Windows harness
+        continue-on-error: true
+        working-directory: target
+        shell: cmd
+        run: |
+          set "VSPATH="
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
+          if not defined VSPATH exit /b 1
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          cl /nologo /W4 /WX /std:c17 windows-lpenvironment-enactment.c
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          windows-lpenvironment-enactment.exe > windows-output.txt
+          set "HARNESS_EXIT=%ERRORLEVEL%"
+          type windows-output.txt
+          if not "%HARNESS_EXIT%"=="0" exit /b %HARNESS_EXIT%
+
+      - id: assertions
+        name: Assert Windows observations
+        if: steps.harness.outcome == 'success'
+        continue-on-error: true
+        working-directory: target
+        shell: pwsh
+        run: |
+          $lines = @(Get-Content -LiteralPath windows-output.txt)
+          if ($lines.Count -ne 18) {
+            throw "Expected 18 observation lines; found $($lines.Count)"
+          }
+
+          $expected = [ordered]@{
+            'CASE:inherit-null-lpEnvironment' = 1
+            'CASE:custom-base-block' = 1
+            'CASE:custom-append-block' = 1
+            'CASE:custom-omit-block' = 1
+            'CASE:custom-replace-block' = 1
+            'PM_INHERITED=parent' = 1
+            'PM_FIRST=1' = 2
+            'PM_SECOND=2' = 4
+            'PM_THIRD=3' = 4
+            'PM_ADDED=entry' = 1
+            'PM_FIRST=replaced' = 1
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            $actual = @($lines | Where-Object { $_ -ceq $entry.Key }).Count
+            if ($actual -ne $entry.Value) {
+              throw "Expected '$($entry.Key)' $($entry.Value) time(s); found $actual"
+            }
+          }
+
+          $hash = (Get-FileHash windows-output.txt -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  windows-output.txt" | Set-Content windows-output.sha256
+
+      - name: Write Windows receipt
+        if: always()
+        shell: pwsh
+        env:
+          HARNESS_OUTCOME: ${{ steps.harness.outcome }}
+          ASSERTIONS_OUTCOME: ${{ steps.assertions.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELAY_REPOSITORY: ${{ github.repository }}
+        run: |
+          $receipt = [ordered]@{
+            schema = 'organvm-ci-relay-receipt/v1'
+            target_repository = $env:TARGET_REPO
+            target_sha = $env:TARGET_SHA
+            profile = $env:TARGET_PROFILE
+            platform = $env:RECEIPT_LABEL
+            harness_outcome = $env:HARNESS_OUTCOME
+            assertions_outcome = $env:ASSERTIONS_OUTCOME
+            relay_repository = $env:RELAY_REPOSITORY
+            run_id = $env:RUN_ID
+            run_attempt = $env:RUN_ATTEMPT
+          }
+          $receipt | ConvertTo-Json | Set-Content `
+            -LiteralPath target/receipt-windows.json
+
+      - name: Upload Windows receipt and observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: receipt-windows
+          path: |
+            target/receipt-windows.json
+            target/windows-output.txt
+            target/windows-output.sha256
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Enforce Windows result
+        if: steps.harness.outcome != 'success' || steps.assertions.outcome != 'success'
+        shell: pwsh
+        run: exit 1
+
+  summarize:
+    name: Relay receipt
+    if: always()
+    needs: [authorize, posix, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Write workflow summary
+        shell: bash
+        env:
+          POSIX_RESULT: ${{ needs.posix.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo '# ORGANVM CI relay receipt'
+            echo
+            echo "- Target: \`organvm/process-environment-enactment\`"
+            echo "- Commit: \`$TARGET_SHA\`"
+            echo "- Profile: \`process-environment-enactment-v1\`"
+            echo "- POSIX matrix: \`$POSIX_RESULT\`"
+            echo "- Windows: \`$WINDOWS_RESULT\`"
+            echo "- Run: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce aggregate result
+        shell: bash
+        env:
+          POSIX_RESULT: ${{ needs.posix.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+        run: |
+          set -euo pipefail
+          [[ "$POSIX_RESULT" == success ]]
+          [[ "$WINDOWS_RESULT" == success ]]
