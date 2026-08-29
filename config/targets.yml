@@ -1,0 +1,18 @@
+schema: organvm.relay-targets.v1
+
+policy:
+  require_public_source: true
+  require_exact_40_hex_sha: true
+  allowed_secrets: []
+  deny_floating_refs: true
+
+targets:
+  process-environment-enactment:
+    stable_repository_id: 1350942566
+    repository: organvm/process-environment-enactment
+    sha: ffebb6fa1020098e18020f6a4a845cf933c0df3c
+    visibility: public
+    profile: process-environment-enactment-v1
+    source_workflow: .github/workflows/enact.yml
+    blocked_source_run: 33279890564
+
