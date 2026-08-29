@@ -39,6 +39,10 @@ jobs:
     outputs:
       owner: ${{ steps.allow.outputs.owner }}
       repository: ${{ steps.allow.outputs.repository }}
+      full_name: ${{ steps.allow.outputs.full_name }}
+      profile: ${{ steps.allow.outputs.profile }}
+      sha: ${{ steps.allow.outputs.sha }}
+      stable_repository_id: ${{ steps.allow.outputs.stable_repository_id }}
     steps:
       - id: allow
         name: Enforce target, profile, and SHA allowlists
@@ -55,6 +59,10 @@ jobs:
           [[ "$TARGET_SHA" == "ffebb6fa1020098e18020f6a4a845cf933c0df3c" ]]
           printf 'owner=organvm\n' >> "$GITHUB_OUTPUT"
           printf 'repository=process-environment-enactment\n' >> "$GITHUB_OUTPUT"
+          printf 'full_name=organvm/process-environment-enactment\n' >> "$GITHUB_OUTPUT"
+          printf 'profile=process-environment-enactment-v1\n' >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\n' "$TARGET_SHA" >> "$GITHUB_OUTPUT"
+          printf 'stable_repository_id=1350942566\n' >> "$GITHUB_OUTPUT"
 
   posix:
     name: POSIX / ${{ matrix.os }}
@@ -71,9 +79,9 @@ jobs:
           - os: macos-latest
             receipt_label: macos
     env:
-      TARGET_REPO: organvm/process-environment-enactment
-      TARGET_SHA: ${{ inputs.sha }}
-      TARGET_PROFILE: process-environment-enactment-v1
+      TARGET_REPO: ${{ needs.authorize.outputs.full_name }}
+      TARGET_SHA: ${{ needs.authorize.outputs.sha }}
+      TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
       RECEIPT_LABEL: ${{ matrix.receipt_label }}
     steps:
       - name: Fetch the allowlisted repository by exact SHA
@@ -131,42 +139,12 @@ jobs:
             posix-omit.txt posix-replace.txt > posix-output.txt
           shasum -a 256 posix-output.txt | tee posix-output.sha256
 
-      - name: Write POSIX receipt
-        if: always()
-        shell: bash
-        env:
-          VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          RELAY_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs');
-          const receipt = {
-            schema: 'organvm-ci-relay-receipt/v1',
-            target_repository: process.env.TARGET_REPO,
-            target_sha: process.env.TARGET_SHA,
-            profile: process.env.TARGET_PROFILE,
-            platform: process.env.RECEIPT_LABEL,
-            outcome: process.env.VALIDATION_OUTCOME,
-            relay_repository: process.env.RELAY_REPOSITORY,
-            run_id: process.env.RUN_ID,
-            run_attempt: process.env.RUN_ATTEMPT
-          };
-          fs.writeFileSync(
-            `target/receipt-${process.env.RECEIPT_LABEL}.json`,
-            JSON.stringify(receipt, null, 2) + '\n'
-          );
-          NODE
-
-      - name: Upload POSIX receipt and observations
+      - name: Upload untrusted POSIX observations
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: receipt-${{ matrix.receipt_label }}
+          name: untrusted-observations-${{ matrix.receipt_label }}
           path: |
-            target/receipt-${{ matrix.receipt_label }}.json
             target/posix-*.txt
             target/posix-output.sha256
           if-no-files-found: warn
@@ -183,9 +161,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     env:
-      TARGET_REPO: organvm/process-environment-enactment
-      TARGET_SHA: ${{ inputs.sha }}
-      TARGET_PROFILE: process-environment-enactment-v1
+      TARGET_REPO: ${{ needs.authorize.outputs.full_name }}
+      TARGET_SHA: ${{ needs.authorize.outputs.sha }}
+      TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
       RECEIPT_LABEL: windows
     steps:
       - name: Fetch the allowlisted repository by exact SHA
@@ -204,12 +182,15 @@ jobs:
             throw "Fetched $actual instead of $env:TARGET_SHA"
           }
 
-      - id: harness
-        name: Compile and execute Windows harness
+      - id: validate
+        name: Compile, execute, and assert Windows behavior
         continue-on-error: true
         working-directory: target
-        shell: cmd
+        shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          @echo off
           set "VSPATH="
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
           if not defined VSPATH exit /b 1
@@ -221,14 +202,12 @@ jobs:
           set "HARNESS_EXIT=%ERRORLEVEL%"
           type windows-output.txt
           if not "%HARNESS_EXIT%"=="0" exit /b %HARNESS_EXIT%
+          '@ | Set-Content -LiteralPath relay-build-and-run.cmd -Encoding ascii
+          & cmd.exe /d /c relay-build-and-run.cmd
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows build or harness exited $LASTEXITCODE"
+          }
 
-      - id: assertions
-        name: Assert Windows observations
-        if: steps.harness.outcome == 'success'
-        continue-on-error: true
-        working-directory: target
-        shell: pwsh
-        run: |
           $lines = @(Get-Content -LiteralPath windows-output.txt)
           if ($lines.Count -ne 18) {
             throw "Expected 18 observation lines; found $($lines.Count)"
@@ -257,61 +236,117 @@ jobs:
           $hash = (Get-FileHash windows-output.txt -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  windows-output.txt" | Set-Content windows-output.sha256
 
-      - name: Write Windows receipt
-        if: always()
-        shell: pwsh
-        env:
-          HARNESS_OUTCOME: ${{ steps.harness.outcome }}
-          ASSERTIONS_OUTCOME: ${{ steps.assertions.outcome }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          RELAY_REPOSITORY: ${{ github.repository }}
-        run: |
-          $receipt = [ordered]@{
-            schema = 'organvm-ci-relay-receipt/v1'
-            target_repository = $env:TARGET_REPO
-            target_sha = $env:TARGET_SHA
-            profile = $env:TARGET_PROFILE
-            platform = $env:RECEIPT_LABEL
-            harness_outcome = $env:HARNESS_OUTCOME
-            assertions_outcome = $env:ASSERTIONS_OUTCOME
-            relay_repository = $env:RELAY_REPOSITORY
-            run_id = $env:RUN_ID
-            run_attempt = $env:RUN_ATTEMPT
-          }
-          $receipt | ConvertTo-Json | Set-Content `
-            -LiteralPath target/receipt-windows.json
-
-      - name: Upload Windows receipt and observations
+      - name: Upload untrusted Windows observations
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: receipt-windows
+          name: untrusted-observations-windows
           path: |
-            target/receipt-windows.json
             target/windows-output.txt
             target/windows-output.sha256
           if-no-files-found: warn
           retention-days: 7
 
       - name: Enforce Windows result
-        if: steps.harness.outcome != 'success' || steps.assertions.outcome != 'success'
+        if: steps.validate.outcome != 'success'
         shell: pwsh
         run: exit 1
 
-  summarize:
-    name: Relay receipt
-    if: always()
+  receipt:
+    name: Canonical isolated receipt
+    if: always() && needs.authorize.result == 'success'
     needs: [authorize, posix, windows]
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      POSIX_RESULT: ${{ needs.posix.result }}
+      WINDOWS_RESULT: ${{ needs.windows.result }}
+      TARGET_REPO: ${{ needs.authorize.outputs.full_name }}
+      TARGET_SHA: ${{ needs.authorize.outputs.sha }}
+      TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
+      TARGET_REPOSITORY_ID: ${{ needs.authorize.outputs.stable_repository_id }}
     steps:
-      - name: Write workflow summary
+      - name: Check out the trusted relay only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: true
+
+      - id: canonical
+        name: Build canonical receipt from trusted job results
         shell: bash
         env:
-          POSIX_RESULT: ${{ needs.posix.result }}
-          WINDOWS_RESULT: ${{ needs.windows.result }}
-          TARGET_SHA: ${{ inputs.sha }}
+          RELAY_REPOSITORY: ${{ github.repository }}
+          RELAY_WORKFLOW_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          receipt_dir="receipts/$TARGET_REPOSITORY_ID/$TARGET_SHA"
+          receipt_file="$receipt_dir/$RUN_ID.$RUN_ATTEMPT.json"
+          mkdir -p "$receipt_dir"
+          export receipt_file
+          node <<'NODE'
+          const fs = require('fs');
+          const allPassed = process.env.POSIX_RESULT === 'success' &&
+            process.env.WINDOWS_RESULT === 'success';
+          const receipt = {
+            schema: 'organvm-ci-relay-receipt/v1',
+            target: {
+              stable_repository_id: process.env.TARGET_REPOSITORY_ID,
+              repository: process.env.TARGET_REPO,
+              sha: process.env.TARGET_SHA,
+              profile: process.env.TARGET_PROFILE
+            },
+            relay: {
+              repository: process.env.RELAY_REPOSITORY,
+              workflow_sha: process.env.RELAY_WORKFLOW_SHA,
+              run_id: process.env.RUN_ID,
+              run_attempt: process.env.RUN_ATTEMPT,
+              run_url: `https://github.com/${process.env.RELAY_REPOSITORY}/actions/runs/${process.env.RUN_ID}`
+            },
+            trusted_job_results: {
+              posix_matrix: process.env.POSIX_RESULT,
+              windows: process.env.WINDOWS_RESULT
+            },
+            source_checkout_verified: allPassed,
+            tests_and_assertions_executed: allPassed,
+            aggregate: allPassed ? 'success' : 'error',
+            generated_at: new Date().toISOString(),
+            observations: 'Untrusted artifacts are not inputs to this receipt.'
+          };
+          fs.writeFileSync(process.env.receipt_file,
+            JSON.stringify(receipt, null, 2) + '\n');
+          NODE
+          sha256sum "$receipt_file" > "$receipt_file.sha256"
+          printf 'receipt_file=%s\n' "$receipt_file" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the durable receipt
+        shell: bash
+        env:
+          RECEIPT_FILE: ${{ steps.canonical.outputs.receipt_file }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$RECEIPT_FILE" "$RECEIPT_FILE.sha256"
+          git commit -m "receipt: $TARGET_REPOSITORY_ID $TARGET_SHA run $GITHUB_RUN_ID"
+          git push origin HEAD:main
+
+      - name: Upload canonical receipt pair
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canonical-receipt
+          path: |
+            ${{ steps.canonical.outputs.receipt_file }}
+            ${{ steps.canonical.outputs.receipt_file }}.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Write workflow summary
+        shell: bash
         run: |
           set -euo pipefail
           {
@@ -327,9 +362,6 @@ jobs:
 
       - name: Enforce aggregate result
         shell: bash
-        env:
-          POSIX_RESULT: ${{ needs.posix.result }}
-          WINDOWS_RESULT: ${{ needs.windows.result }}
         run: |
           set -euo pipefail
           [[ "$POSIX_RESULT" == success ]]
