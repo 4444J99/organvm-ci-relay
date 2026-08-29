@@ -53,6 +53,7 @@ jobs:
           TARGET_PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$TARGET_REPO" == "organvm/process-environment-enactment" ]]
           [[ "$TARGET_PROFILE" == "process-environment-enactment-v1" ]]
           [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -260,6 +261,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
+    concurrency:
+      group: relay-receipt-main-writer
+      cancel-in-progress: false
     env:
       POSIX_RESULT: ${{ needs.posix.result }}
       WINDOWS_RESULT: ${{ needs.windows.result }}
@@ -279,7 +283,9 @@ jobs:
         shell: bash
         env:
           RELAY_REPOSITORY: ${{ github.repository }}
-          RELAY_WORKFLOW_SHA: ${{ github.sha }}
+          RELAY_EVENT_SHA: ${{ github.sha }}
+          RELAY_WORKFLOW_REF: ${{ github.workflow_ref }}
+          RELAY_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -303,6 +309,8 @@ jobs:
             relay: {
               repository: process.env.RELAY_REPOSITORY,
               workflow_sha: process.env.RELAY_WORKFLOW_SHA,
+              workflow_ref: process.env.RELAY_WORKFLOW_REF,
+              event_sha: process.env.RELAY_EVENT_SHA,
               run_id: process.env.RUN_ID,
               run_attempt: process.env.RUN_ATTEMPT,
               run_url: `https://github.com/${process.env.RELAY_REPOSITORY}/actions/runs/${process.env.RUN_ID}`
@@ -323,6 +331,17 @@ jobs:
           sha256sum "$receipt_file" > "$receipt_file.sha256"
           printf 'receipt_file=%s\n' "$receipt_file" >> "$GITHUB_OUTPUT"
 
+      - name: Upload canonical receipt pair
+        if: always() && steps.canonical.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canonical-receipt
+          path: |
+            ${{ steps.canonical.outputs.receipt_file }}
+            ${{ steps.canonical.outputs.receipt_file }}.sha256
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Commit the durable receipt
         shell: bash
         env:
@@ -333,17 +352,9 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add "$RECEIPT_FILE" "$RECEIPT_FILE.sha256"
           git commit -m "receipt: $TARGET_REPOSITORY_ID $TARGET_SHA run $GITHUB_RUN_ID"
+          git fetch origin main
+          git rebase origin/main
           git push origin HEAD:main
-
-      - name: Upload canonical receipt pair
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: canonical-receipt
-          path: |
-            ${{ steps.canonical.outputs.receipt_file }}
-            ${{ steps.canonical.outputs.receipt_file }}.sha256
-          if-no-files-found: error
-          retention-days: 90
 
       - name: Write workflow summary
         shell: bash
