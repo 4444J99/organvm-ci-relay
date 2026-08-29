@@ -16,6 +16,9 @@ runner label, shell command, secret, or artifact path.
 - Test jobs receive no repository or environment secrets.
 - Only GitHub-owned actions pinned to full commit SHAs are used.
 - No cross-repository write credential exists in the MVP.
+- Target-produced files are untrusted observations. Canonical receipts are
+  generated on a fresh runner from validated authorization outputs and GitHub's
+  job results; that runner never downloads or executes target artifacts.
 - Future status publication must use a separate job that never checks out or
   executes target code, through a GitHub App installed only on explicitly
   selected target repositories, with only `Commit statuses: read and write`.
@@ -30,6 +33,7 @@ For the clean publication canary, use:
 
 `ffebb6fa1020098e18020f6a4a845cf933c0df3c`
 
-Each operating-system job uploads a seven-day JSON receipt and observation
-files. The workflow summary records the target SHA, profile, and final result.
-
+Each operating-system job may upload seven-day **untrusted observations**. A
+fresh isolated job writes the canonical JSON receipt and SHA-256 companion to
+`receipts/<stable-repository-id>/<target-sha>/`, commits them to `main`, and
+uploads the same pair as a 90-day artifact.
