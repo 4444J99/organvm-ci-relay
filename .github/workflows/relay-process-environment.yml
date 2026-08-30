@@ -32,7 +32,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: relay-${{ inputs.profile }}-${{ inputs.sha }}
+  group: relay-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -64,6 +64,8 @@ jobs:
           TARGET_SHA: ${{ inputs.sha }}
           TARGET_PROFILE: ${{ inputs.profile }}
           LEAD_PROVIDER: ${{ inputs.lead_provider }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
@@ -72,9 +74,17 @@ jobs:
           [[ "$TARGET_PROFILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
           [[ "$LEAD_PROVIDER" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ ]]
 
+          curl --fail --silent --show-error \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer $GITHUB_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$TARGET_REPO" \
+            > live-repository.json
+
           node <<'NODE'
           const fs = require('fs');
           const config = JSON.parse(fs.readFileSync('config/targets.json', 'utf8'));
+          const live = JSON.parse(fs.readFileSync('live-repository.json', 'utf8'));
           const repository = process.env.TARGET_REPO;
           const profile = process.env.TARGET_PROFILE;
           const entry = config.targets?.[repository];
@@ -87,6 +97,15 @@ jobs:
           }
           if (!/^[0-9]+$/.test(String(entry.stable_repository_id))) {
             throw new Error(`Invalid stable_repository_id for ${repository}`);
+          }
+          if (String(live.id) !== String(entry.stable_repository_id)) {
+            throw new Error(`Repository ID mismatch for ${repository}`);
+          }
+          if (live.private !== false || live.visibility !== 'public') {
+            throw new Error(`Live repository is not public: ${repository}`);
+          }
+          if (String(live.full_name).toLowerCase() !== repository.toLowerCase()) {
+            throw new Error(`Canonical repository name mismatch for ${repository}`);
           }
 
           const [owner, name] = repository.split('/');
@@ -425,4 +444,3 @@ jobs:
           set -euo pipefail
           [[ "$POSIX_RESULT" == success ]]
           [[ "$WINDOWS_RESULT" == success ]]
-

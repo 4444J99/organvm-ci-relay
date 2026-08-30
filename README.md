@@ -8,7 +8,7 @@ commit SHA.
 ## One command
 
 ```bash
-bash relay.sh
+./relay
 ```
 
 That runs the known-good canary. Override only the values that change:
@@ -18,15 +18,13 @@ TARGET_REPO=organvm/process-environment-enactment \
 TARGET_SHA=ffebb6fa1020098e18020f6a4a845cf933c0df3c \
 PROFILE=process-environment-enactment-v1 \
 LEAD_PROVIDER=codex \
-bash relay.sh
+./relay
 ```
 
-The complete runtime contract is six variables:
+The complete runtime contract is four variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CI_RELAY_REPO` | `4444J99/organvm-ci-relay` | Healthy GitHub billing/execution boundary |
-| `CI_RELAY_REF` | `main` | Trusted relay workflow ref |
 | `TARGET_REPO` | canary repository | Public repository to test |
 | `TARGET_SHA` | known-good canary SHA | Exact source commit; floating refs are rejected |
 | `PROFILE` | canary profile | Relay-owned test procedure |
@@ -34,8 +32,9 @@ The complete runtime contract is six variables:
 
 Codex, Claude, Warp, a human, or a future provider invokes the same command.
 Switching provider changes only `LEAD_PROVIDER` and the caller's existing
-GitHub authentication. Repository ownership, workflow code, and billing do not
-move.
+GitHub authentication. The relay repository and trusted `main` workflow are
+intentionally fixed; repository ownership, workflow code, and billing do not
+move during provider switches.
 
 ## Dynamic target policy
 
@@ -59,4 +58,3 @@ label, shell command, secret, artifact path, or arbitrary workflow.
 - `LEAD_PROVIDER` is audit metadata, not an authorization mechanism.
 - No payment method, paid runner, organization transfer, or vendor-specific App
   setting is part of normal dispatch.
-
