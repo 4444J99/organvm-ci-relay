@@ -52,7 +52,7 @@ jobs:
       lead_provider: ${{ steps.allow.outputs.lead_provider }}
     steps:
       - name: Check out trusted relay configuration
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -315,7 +315,7 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: relay-receipt-main-writer
+      group: relay-receipt-ledger-writer
       cancel-in-progress: false
     env:
       POSIX_RESULT: ${{ needs.posix.result }}
@@ -326,10 +326,12 @@ jobs:
       TARGET_REPOSITORY_ID: ${{ needs.authorize.outputs.stable_repository_id }}
       LEAD_PROVIDER: ${{ needs.authorize.outputs.lead_provider }}
     steps:
-      - name: Check out the trusted relay only
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check out the isolated receipt ledger
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: main
+          ref: receipts
+          path: ledger
+          fetch-depth: 1
           persist-credentials: true
 
       - id: canonical
@@ -345,7 +347,7 @@ jobs:
           RELAY_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          receipt_dir="receipts/$TARGET_REPOSITORY_ID/$TARGET_SHA"
+          receipt_dir="ledger/receipts/$TARGET_REPOSITORY_ID/$TARGET_SHA"
           receipt_file="$receipt_dir/$RUN_ID.$RUN_ATTEMPT.json"
           mkdir -p "$receipt_dir"
           export receipt_file
@@ -408,13 +410,13 @@ jobs:
           RECEIPT_FILE: ${{ steps.canonical.outputs.receipt_file }}
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add "$RECEIPT_FILE" "$RECEIPT_FILE.sha256"
-          git commit -m "receipt: $TARGET_REPOSITORY_ID $TARGET_SHA run $GITHUB_RUN_ID"
-          git fetch origin main
-          git rebase origin/main
-          git push origin HEAD:main
+          git -C ledger config user.name 'github-actions[bot]'
+          git -C ledger config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          relative_receipt="${RECEIPT_FILE#ledger/}"
+          git -C ledger add "$relative_receipt" "$relative_receipt.sha256"
+          git -C ledger commit -m "receipt: $TARGET_REPOSITORY_ID $TARGET_SHA run $GITHUB_RUN_ID"
+          git -C ledger pull --rebase origin receipts
+          git -C ledger push origin HEAD:receipts
 
       - name: Write workflow summary
         shell: bash
@@ -430,6 +432,7 @@ jobs:
             echo "- POSIX matrix: \`$POSIX_RESULT\`"
             echo "- Windows: \`$WINDOWS_RESULT\`"
             echo "- Run: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\`"
+            echo "- Durable ledger: \`receipts\` branch"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce aggregate result
