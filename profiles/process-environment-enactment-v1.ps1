@@ -43,3 +43,6 @@ foreach ($entry in $expected.GetEnumerator()) {
     throw "Expected '$($entry.Key)' $($entry.Value) time(s); found $actual"
   }
 }
+
+$hash = (Get-FileHash windows-output.txt -Algorithm SHA256).Hash.ToLowerInvariant()
+"$hash  windows-output.txt" | Set-Content windows-output.sha256
