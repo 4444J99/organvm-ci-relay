@@ -1,27 +1,31 @@
 name: "Relay: process-environment enactment"
 
 run-name: >-
-  relay ${{ inputs.profile }} @ ${{ inputs.sha }}
+  relay ${{ inputs.profile }} @ ${{ inputs.sha }} via ${{ inputs.lead_provider }}
 
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: Audited public target
+        description: Allowlisted public owner/repository
         required: true
-        type: choice
-        options:
-          - organvm/process-environment-enactment
+        default: organvm/process-environment-enactment
+        type: string
       sha:
         description: Full 40-character lowercase commit SHA
         required: true
+        default: ffebb6fa1020098e18020f6a4a845cf933c0df3c
         type: string
       profile:
-        description: Relay-owned validation profile
+        description: Allowlisted relay-owned validation profile
         required: true
-        type: choice
-        options:
-          - process-environment-enactment-v1
+        default: process-environment-enactment-v1
+        type: string
+      lead_provider:
+        description: Provenance label only; never grants access
+        required: true
+        default: operator
+        type: string
 
 # No target-repository credential is available to test jobs. Artifact transport
 # uses GitHub's per-job Actions runtime token rather than repository permissions.
@@ -36,6 +40,8 @@ jobs:
     name: Authorize dispatch
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    permissions:
+      contents: read
     outputs:
       owner: ${{ steps.allow.outputs.owner }}
       repository: ${{ steps.allow.outputs.repository }}
@@ -43,7 +49,13 @@ jobs:
       profile: ${{ steps.allow.outputs.profile }}
       sha: ${{ steps.allow.outputs.sha }}
       stable_repository_id: ${{ steps.allow.outputs.stable_repository_id }}
+      lead_provider: ${{ steps.allow.outputs.lead_provider }}
     steps:
+      - name: Check out trusted relay configuration
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
       - id: allow
         name: Enforce target, profile, and SHA allowlists
         shell: bash
@@ -51,19 +63,47 @@ jobs:
           TARGET_REPO: ${{ inputs.target }}
           TARGET_SHA: ${{ inputs.sha }}
           TARGET_PROFILE: ${{ inputs.profile }}
+          LEAD_PROVIDER: ${{ inputs.lead_provider }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
-          [[ "$TARGET_REPO" == "organvm/process-environment-enactment" ]]
-          [[ "$TARGET_PROFILE" == "process-environment-enactment-v1" ]]
+          [[ "$TARGET_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$ ]]
           [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$TARGET_SHA" == "ffebb6fa1020098e18020f6a4a845cf933c0df3c" ]]
-          printf 'owner=organvm\n' >> "$GITHUB_OUTPUT"
-          printf 'repository=process-environment-enactment\n' >> "$GITHUB_OUTPUT"
-          printf 'full_name=organvm/process-environment-enactment\n' >> "$GITHUB_OUTPUT"
-          printf 'profile=process-environment-enactment-v1\n' >> "$GITHUB_OUTPUT"
-          printf 'sha=%s\n' "$TARGET_SHA" >> "$GITHUB_OUTPUT"
-          printf 'stable_repository_id=1350942566\n' >> "$GITHUB_OUTPUT"
+          [[ "$TARGET_PROFILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
+          [[ "$LEAD_PROVIDER" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ ]]
+
+          node <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('config/targets.json', 'utf8'));
+          const repository = process.env.TARGET_REPO;
+          const profile = process.env.TARGET_PROFILE;
+          const entry = config.targets?.[repository];
+
+          if (!entry || entry.visibility !== 'public') {
+            throw new Error(`Target is not an allowlisted public repository: ${repository}`);
+          }
+          if (!Array.isArray(entry.profiles) || !entry.profiles.includes(profile)) {
+            throw new Error(`Profile ${profile} is not allowed for ${repository}`);
+          }
+          if (!/^[0-9]+$/.test(String(entry.stable_repository_id))) {
+            throw new Error(`Invalid stable_repository_id for ${repository}`);
+          }
+
+          const [owner, name] = repository.split('/');
+          const lines = {
+            owner,
+            repository: name,
+            full_name: repository,
+            profile,
+            sha: process.env.TARGET_SHA,
+            stable_repository_id: String(entry.stable_repository_id),
+            lead_provider: process.env.LEAD_PROVIDER
+          };
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            Object.entries(lines).map(([key, value]) => `${key}=${value}\n`).join('')
+          );
+          NODE
 
   posix:
     name: POSIX / ${{ matrix.os }}
@@ -92,7 +132,7 @@ jobs:
           mkdir target
           git -C target init
           git -C target remote add origin \
-            https://github.com/organvm/process-environment-enactment.git
+            "https://github.com/${TARGET_REPO}.git"
           git -C target -c protocol.version=2 fetch \
             --no-tags --depth=1 origin "$TARGET_SHA"
           git -C target checkout --detach FETCH_HEAD
@@ -174,7 +214,7 @@ jobs:
           New-Item -ItemType Directory -Path target | Out-Null
           git -C target init
           git -C target remote add origin `
-            https://github.com/organvm/process-environment-enactment.git
+            "https://github.com/$env:TARGET_REPO.git"
           git -C target -c protocol.version=2 fetch `
             --no-tags --depth=1 origin $env:TARGET_SHA
           git -C target checkout --detach FETCH_HEAD
@@ -271,6 +311,7 @@ jobs:
       TARGET_SHA: ${{ needs.authorize.outputs.sha }}
       TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
       TARGET_REPOSITORY_ID: ${{ needs.authorize.outputs.stable_repository_id }}
+      LEAD_PROVIDER: ${{ needs.authorize.outputs.lead_provider }}
     steps:
       - name: Check out the trusted relay only
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -288,6 +329,7 @@ jobs:
           RELAY_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELAY_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           receipt_dir="receipts/$TARGET_REPOSITORY_ID/$TARGET_SHA"
@@ -314,6 +356,10 @@ jobs:
               run_id: process.env.RUN_ID,
               run_attempt: process.env.RUN_ATTEMPT,
               run_url: `https://github.com/${process.env.RELAY_REPOSITORY}/actions/runs/${process.env.RUN_ID}`
+            },
+            dispatch: {
+              actor: process.env.RELAY_ACTOR,
+              declared_lead_provider: process.env.LEAD_PROVIDER
             },
             trusted_job_results: {
               posix_matrix: process.env.POSIX_RESULT,
@@ -364,9 +410,10 @@ jobs:
           {
             echo '# ORGANVM CI relay receipt'
             echo
-            echo "- Target: \`organvm/process-environment-enactment\`"
+            echo "- Target: \`$TARGET_REPO\`"
             echo "- Commit: \`$TARGET_SHA\`"
-            echo "- Profile: \`process-environment-enactment-v1\`"
+            echo "- Profile: \`$TARGET_PROFILE\`"
+            echo "- Declared lead provider: \`$LEAD_PROVIDER\`"
             echo "- POSIX matrix: \`$POSIX_RESULT\`"
             echo "- Windows: \`$WINDOWS_RESULT\`"
             echo "- Run: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\`"
@@ -378,3 +425,4 @@ jobs:
           set -euo pipefail
           [[ "$POSIX_RESULT" == success ]]
           [[ "$WINDOWS_RESULT" == success ]]
+

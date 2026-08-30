@@ -1,39 +1,62 @@
 # ORGANVM CI relay
 
-This public personal-account repository is a narrow execution plane for audited
-public ORGANVM source commits while organization-owned GitHub Actions cannot
-receive runners.
+A public execution plane for ORGANVM repositories when an organization cannot
+receive GitHub-hosted runners. The relay runs on the healthy account that owns
+this repository and fetches allowlisted public source anonymously at an exact
+commit SHA.
 
-The first profile runs the process-environment enactment harness on Linux,
-macOS, and Windows. The repository name, commit SHA, and commands are fixed in
-the trusted workflow and `config/targets.yml`. A dispatch must repeat the full
-40-character allowlisted commit SHA; it accepts no repository URL, branch,
-runner label, shell command, secret, or artifact path.
+## One command
+
+```bash
+bash relay.sh
+```
+
+That runs the known-good canary. Override only the values that change:
+
+```bash
+TARGET_REPO=organvm/process-environment-enactment \
+TARGET_SHA=ffebb6fa1020098e18020f6a4a845cf933c0df3c \
+PROFILE=process-environment-enactment-v1 \
+LEAD_PROVIDER=codex \
+bash relay.sh
+```
+
+The complete runtime contract is six variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CI_RELAY_REPO` | `4444J99/organvm-ci-relay` | Healthy GitHub billing/execution boundary |
+| `CI_RELAY_REF` | `main` | Trusted relay workflow ref |
+| `TARGET_REPO` | canary repository | Public repository to test |
+| `TARGET_SHA` | known-good canary SHA | Exact source commit; floating refs are rejected |
+| `PROFILE` | canary profile | Relay-owned test procedure |
+| `LEAD_PROVIDER` | `operator` | Receipt provenance only; it grants no access |
+
+Codex, Claude, Warp, a human, or a future provider invokes the same command.
+Switching provider changes only `LEAD_PROVIDER` and the caller's existing
+GitHub authentication. Repository ownership, workflow code, and billing do not
+move.
+
+## Dynamic target policy
+
+`config/targets.json` is the single allowlist. A target is registered once with
+its stable repository ID, public visibility, and supported profiles. The
+workflow then accepts any full 40-character commit SHA for that target; no
+workflow edit is needed per commit.
+
+Profiles remain trusted code in the relay. Runtime inputs never accept a runner
+label, shell command, secret, artifact path, or arbitrary workflow.
 
 ## Trust boundary
 
 - Test jobs fetch public source anonymously by exact SHA.
-- Test jobs receive no repository or environment secrets.
-- Only GitHub-owned actions pinned to full commit SHAs are used.
-- No cross-repository write credential exists in the MVP.
-- Target-produced files are untrusted observations. Canonical receipts are
-  generated on a fresh runner from validated authorization outputs and GitHub's
-  job results; that runner never downloads or executes target artifacts.
-- Future status publication must use a separate job that never checks out or
-  executes target code, through a GitHub App installed only on explicitly
-  selected target repositories, with only `Commit statuses: read and write`.
-- The `target-status` environment must restrict deployment branches to `main`.
+- Test jobs receive no repository or environment secrets and have
+  `permissions: {}`.
+- Only standard GitHub-hosted runners are used.
+- GitHub-owned actions are pinned to full commit SHAs.
+- Canonical receipts are generated on a fresh runner from authorization outputs
+  and job results; the receipt job never downloads or executes target artifacts.
+- `LEAD_PROVIDER` is audit metadata, not an authorization mechanism.
+- No payment method, paid runner, organization transfer, or vendor-specific App
+  setting is part of normal dispatch.
 
-## Run the MVP
-
-Open **Actions → Relay: process-environment enactment → Run workflow**, leave
-the fixed target and profile selected, and enter the target's full commit SHA.
-
-For the clean publication canary, use:
-
-`ffebb6fa1020098e18020f6a4a845cf933c0df3c`
-
-Each operating-system job may upload seven-day **untrusted observations**. A
-fresh isolated job writes the canonical JSON receipt and SHA-256 companion to
-`receipts/<stable-repository-id>/<target-sha>/`, commits them to `main`, and
-uploads the same pair as a 90-day artifact.

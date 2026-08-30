@@ -1,0 +1,19 @@
+{
+  "schema": "organvm.relay-targets.v2",
+  "policy": {
+    "require_public_source": true,
+    "require_exact_40_hex_sha": true,
+    "allowed_secrets": [],
+    "deny_floating_refs": true
+  },
+  "targets": {
+    "organvm/process-environment-enactment": {
+      "stable_repository_id": "1350942566",
+      "visibility": "public",
+      "profiles": [
+        "process-environment-enactment-v1"
+      ]
+    }
+  }
+}
+
