@@ -1,10 +1,25 @@
 {
-  "schema": "organvm.relay-targets.v2",
+  "schema": "organvm.relay-targets.v3",
   "policy": {
     "require_public_source": true,
     "require_exact_40_hex_sha": true,
     "allowed_secrets": [],
-    "deny_floating_refs": true
+    "deny_floating_refs": true,
+    "receipt_branch": "receipts"
+  },
+  "profiles": {
+    "process-environment-enactment-v1": {
+      "family": "process-environment",
+      "description": "Cross-platform C harness for process-environment enactment"
+    },
+    "python-ruff-pytest-v1": {
+      "family": "python",
+      "description": "Python 3.11/3.12 editable install, pytest, and Ruff"
+    },
+    "organvm-engine-v1": {
+      "family": "python",
+      "description": "ORGANVM engine matrix with Ruff, Pyright, and the full pytest suite"
+    }
   },
   "targets": {
     "organvm/process-environment-enactment": {
@@ -13,7 +28,36 @@
       "profiles": [
         "process-environment-enactment-v1"
       ]
+    },
+    "organvm/learning-resources": {
+      "stable_repository_id": "1155240211",
+      "visibility": "public",
+      "profiles": [
+        "python-ruff-pytest-v1"
+      ],
+      "regression_candidate": {
+        "sha": "40026461978855cb63dade9ce4a501328c9b8600",
+        "profile": "python-ruff-pytest-v1",
+        "python_versions": [
+          "3.11",
+          "3.12"
+        ]
+      }
+    },
+    "organvm/organvm-engine": {
+      "stable_repository_id": "1160447354",
+      "visibility": "public",
+      "profiles": [
+        "organvm-engine-v1"
+      ],
+      "regression_candidate": {
+        "sha": "f9aeb3f0bc4a329579dcffa2446d813fa8d84141",
+        "profile": "organvm-engine-v1",
+        "python_versions": [
+          "3.11",
+          "3.12"
+        ]
+      }
     }
   }
 }
-
