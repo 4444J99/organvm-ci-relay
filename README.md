@@ -46,6 +46,17 @@ workflow edit is needed per commit.
 Profiles remain trusted code in the relay. Runtime inputs never accept a runner
 label, shell command, secret, artifact path, or arbitrary workflow.
 
+## Write isolation
+
+The trusted workflow, target registry, and future relay-owned profiles live on
+`main`. Canonical JSON/SHA-256 receipt pairs live only on the separate
+`receipts` branch. The receipt job runs on a fresh runner, never downloads
+target artifacts, and has the workflow's only `contents: write` permission.
+
+`main` must be protected by a repository ruleset. Until that setting is
+verified, this repository is an execution prototype rather than a privileged
+status-signing root. Cross-repository status publication remains deferred.
+
 ## Trust boundary
 
 - Test jobs fetch public source anonymously by exact SHA.
@@ -55,6 +66,7 @@ label, shell command, secret, artifact path, or arbitrary workflow.
 - GitHub-owned actions are pinned to full commit SHAs.
 - Canonical receipts are generated on a fresh runner from authorization outputs
   and job results; the receipt job never downloads or executes target artifacts.
+- Durable receipt commits go only to the `receipts` branch, never trusted `main`.
 - `LEAD_PROVIDER` is audit metadata, not an authorization mechanism.
 - No payment method, paid runner, organization transfer, or vendor-specific App
   setting is part of normal dispatch.
