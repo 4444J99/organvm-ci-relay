@@ -84,6 +84,9 @@ if (!workflow.includes('permissions: {}')) {
 if (workflow.includes('secrets.')) {
   fail('The relay workflow may not reference secrets');
 }
+if (fs.existsSync('receipts')) {
+  fail('Receipt data must not be tracked on the trusted branch');
+}
 if (!workflow.includes('ref: receipts')) {
   fail('The receipt job must check out the receipts branch');
 }
