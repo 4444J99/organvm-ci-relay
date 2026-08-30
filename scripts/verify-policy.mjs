@@ -35,8 +35,17 @@ const families = new Set(['process-environment', 'python']);
 for (const [name, profile] of Object.entries(config.profiles ?? {})) {
   if (!profilePattern.test(name)) fail(`Invalid profile: ${name}`);
   if (!families.has(profile.family)) fail(`Invalid profile family: ${name}`);
-  if (!fs.existsSync(path.join('profiles', `${name}.sh`))) {
+  const shellProfilePath = path.join('profiles', `${name}.sh`);
+  if (!fs.existsSync(shellProfilePath)) {
     fail(`Missing relay-owned profile: ${name}`);
+  }
+  const shellProfile = fs.readFileSync(shellProfilePath, 'utf8');
+  const externalGitUrls =
+    shellProfile.match(/git\+https:\/\/[^\s'"]+/g) ?? [];
+  for (const externalGitUrl of externalGitUrls) {
+    if (!/\.git@[0-9a-f]{40}(?:#.*)?$/.test(externalGitUrl)) {
+      fail(`Unpinned Git dependency in profile: ${name}`);
+    }
   }
   if (profile.family === 'process-environment' &&
       !fs.existsSync(path.join('profiles', `${name}.ps1`))) {
@@ -72,6 +81,8 @@ for (const [target, entry] of Object.entries(config.targets ?? {})) {
       fail(`Only isolated Python regression candidates are supported: ${target}`);
     }
     if (!Array.isArray(candidate.python_versions) ||
+        candidate.python_versions.length === 0 ||
+        new Set(candidate.python_versions).size !== candidate.python_versions.length ||
         candidate.python_versions.some((version) => !['3.11', '3.12'].includes(version))) {
       fail(`Invalid Python regression matrix: ${target}`);
     }
