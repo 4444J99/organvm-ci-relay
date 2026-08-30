@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_REPO="${TARGET_REPO:-organvm/process-environment-enactment}"
+TARGET_SHA="${TARGET_SHA:-ffebb6fa1020098e18020f6a4a845cf933c0df3c}"
+PROFILE="${PROFILE:-process-environment-enactment-v1}"
+LEAD_PROVIDER="${LEAD_PROVIDER:-operator}"
+
+[[ "$TARGET_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$ ]]
+[[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$PROFILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]
+[[ "$LEAD_PROVIDER" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$ ]]
+
+exec gh workflow run relay-process-environment.yml \
+  --repo 4444J99/organvm-ci-relay \
+  --ref main \
+  --raw-field "target=$TARGET_REPO" \
+  --raw-field "sha=$TARGET_SHA" \
+  --raw-field "profile=$PROFILE" \
+  --raw-field "lead_provider=$LEAD_PROVIDER"
