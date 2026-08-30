@@ -60,6 +60,12 @@ Every trust-root push runs the known-good cross-platform process canary plus
 the exact registered Python regression candidates. Manual dispatch remains the
 four-variable path for any allowlisted candidate SHA.
 
+Exact-SHA guarantees apply to the relay and target Git source revisions.
+Python profiles currently resolve the dependency ranges declared by each
+target at run time, so those executions are networked and non-hermetic. A
+receipt attests the verified source identities and the observed test result;
+it does not claim byte-for-byte dependency reproducibility.
+
 ## Write isolation
 
 The trusted workflow, target registry, and future relay-owned profiles live on

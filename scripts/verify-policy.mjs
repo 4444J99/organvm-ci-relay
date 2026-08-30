@@ -5,10 +5,25 @@ const fail = (message) => {
   throw new Error(message);
 };
 const config = JSON.parse(fs.readFileSync('config/targets.json', 'utf8'));
-const workflow = fs.readFileSync(
-  '.github/workflows/relay-process-environment.yml',
-  'utf8',
+const workflowDirectory = path.join('.github', 'workflows');
+const expectedWorkflowFiles = [
+  'relay-policy.yml',
+  'relay-process-environment.yml',
+];
+const workflowFiles = fs.readdirSync(workflowDirectory)
+  .filter((file) => /\.ya?ml$/.test(file))
+  .sort();
+if (JSON.stringify(workflowFiles) !== JSON.stringify(expectedWorkflowFiles)) {
+  fail(`Unexpected workflow set: ${workflowFiles.join(', ')}`);
+}
+const workflows = Object.fromEntries(
+  workflowFiles.map((file) => [
+    file,
+    fs.readFileSync(path.join(workflowDirectory, file), 'utf8'),
+  ]),
 );
+const workflow = workflows['relay-process-environment.yml'];
+const policyWorkflow = workflows['relay-policy.yml'];
 
 if (config.schema !== 'organvm.relay-targets.v3') {
   fail('Unexpected target-registry schema');
@@ -39,17 +54,28 @@ for (const [name, profile] of Object.entries(config.profiles ?? {})) {
   if (!fs.existsSync(shellProfilePath)) {
     fail(`Missing relay-owned profile: ${name}`);
   }
-  const shellProfile = fs.readFileSync(shellProfilePath, 'utf8');
-  const externalGitUrls =
-    shellProfile.match(/git\+https:\/\/[^\s'"]+/g) ?? [];
-  for (const externalGitUrl of externalGitUrls) {
-    if (!/\.git@[0-9a-f]{40}(?:#.*)?$/.test(externalGitUrl)) {
-      fail(`Unpinned Git dependency in profile: ${name}`);
+  const executableProfilePaths = [shellProfilePath];
+  if (profile.family === 'process-environment') {
+    const windowsProfilePath = path.join('profiles', `${name}.ps1`);
+    if (!fs.existsSync(windowsProfilePath)) {
+      fail(`Missing Windows relay profile: ${name}`);
     }
+    executableProfilePaths.push(windowsProfilePath);
   }
-  if (profile.family === 'process-environment' &&
-      !fs.existsSync(path.join('profiles', `${name}.ps1`))) {
-    fail(`Missing Windows relay profile: ${name}`);
+  for (const executableProfilePath of executableProfilePaths) {
+    const source = fs.readFileSync(executableProfilePath, 'utf8');
+    const gitDependencies = source.match(
+      /git\+(?:https?|ssh|git|file):\/\/[^\s'"]+/gi,
+    ) ?? [];
+    for (const dependency of gitDependencies) {
+      if (!dependency.startsWith('git+https://') ||
+          !/\.git@[0-9a-f]{40}(?:[#?][^\s'"]*)?$/.test(dependency)) {
+        fail(`Unpinned or unsupported Git dependency in ${executableProfilePath}`);
+      }
+    }
+    if (/\bgit\s+(?:clone|fetch|pull|submodule)\b/i.test(source)) {
+      fail(`Raw Git network command in ${executableProfilePath}`);
+    }
   }
 }
 
@@ -89,33 +115,89 @@ for (const [target, entry] of Object.entries(config.targets ?? {})) {
   }
 }
 
-if (!workflow.includes('permissions: {}')) {
+if (!/^permissions:\s*\{\}\s*$/m.test(workflow)) {
   fail('The workflow must default to zero permissions');
 }
-if (/\$\{\{\s*secrets\./.test(workflow)) {
-  fail('The relay workflow may not reference the GitHub secrets context');
+for (const [file, source] of Object.entries(workflows)) {
+  const expressions = source.match(/\$\{\{[\s\S]*?\}\}/g) ?? [];
+  if (expressions.some((expression) => /\bsecrets\b/.test(expression))) {
+    fail(`Workflow may not reference the GitHub secrets context: ${file}`);
+  }
+  if (/^\s*permissions:\s*write-all\s*$/m.test(source)) {
+    fail(`Workflow may not grant write-all permissions: ${file}`);
+  }
 }
 if (fs.existsSync('receipts')) {
   fail('Receipt data must not be tracked on the trusted branch');
 }
-if (!workflow.includes('ref: receipts')) {
+if (!workflow.split('\n').some((line) => line.trim() === 'ref: receipts')) {
   fail('The receipt job must check out the receipts branch');
 }
-if (!workflow.includes('git -C ledger push origin HEAD:receipts')) {
-  fail('Durable receipts must be pushed only to the receipts branch');
+const pushCommands = workflow.split('\n')
+  .map((line) => line.trim())
+  .filter((line) => !line.startsWith('#') &&
+    /\bgit(?:\s+-C\s+\S+)?\s+push\b/.test(line));
+if (pushCommands.length !== 1 ||
+    pushCommands[0] !== 'git -C ledger push origin HEAD:receipts') {
+  fail('The receipt push must be the only Git push command');
 }
-if (workflow.includes('git push origin HEAD:main') ||
-    workflow.includes('git -C ledger push origin HEAD:main')) {
-  fail('The receipt job must never push to main');
+const writePermissions = [...workflow.matchAll(
+  /^\s+([a-z-]+):\s*write\s*(?:#.*)?$/gm,
+)];
+if (writePermissions.length !== 1 || writePermissions[0][1] !== 'contents') {
+  fail('Only the isolated receipt job may receive one contents: write grant');
+}
+if (!/^  receipt:\s*$[\s\S]*?^    permissions:\s*$\n^      contents:\s*write\s*$/m
+    .test(workflow)) {
+  fail('The contents: write grant must belong to the receipt job');
+}
+const requiredExecutableLines = [
+  '- ".github/workflows/relay-policy.yml"',
+  '- "scripts/**"',
+  'relay-${{ github.event_name == \'push\' && github.sha || format(\'{0}-{1}-{2}\', inputs.target, inputs.profile, inputs.sha) }}',
+  'cancel-in-progress: ${{ github.event_name != \'push\' }}',
+  '[[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]',
+  'fetch --no-tags --depth=1 origin "$revision"',
+  '[[ "$(git -C "$directory" rev-parse HEAD)" == "$revision" ]]',
+  'relative_receipt="${receipt_file#ledger/}"',
+  'sha256sum "$relative_receipt"',
+  'sha256sum -c "$relative_receipt.sha256"',
+];
+const executableLines = new Set(
+  workflow.split('\n').map((line) => line.trim()),
+);
+for (const line of requiredExecutableLines) {
+  if (!executableLines.has(line)) {
+    fail(`Missing trust-boundary command: ${line}`);
+  }
+}
+if (workflow.includes('sha256sum "$receipt_file" > "$receipt_file.sha256"')) {
+  fail('Receipt checksums must record branch-relative paths');
 }
 
-const actionUses = workflow
-  .split('\n')
+const policyRunLines = policyWorkflow.split('\n')
   .map((line) => line.trim())
-  .filter((line) => line.startsWith('uses: actions/'));
-for (const line of actionUses) {
-  if (!/@[0-9a-f]{40}(?:\s|$)/.test(line)) {
-    fail(`GitHub-owned action is not pinned to a full SHA: ${line}`);
+  .filter((line) => /^-\s*run:/.test(line));
+const expectedPolicyRunLines = [
+  '- run: node scripts/verify-policy.mjs',
+  '- run: node scripts/test-policy.mjs',
+];
+if (JSON.stringify(policyRunLines) !== JSON.stringify(expectedPolicyRunLines)) {
+  fail('Relay policy workflow must run only the verifier and its regressions');
+}
+
+for (const [file, source] of Object.entries(workflows)) {
+  for (const rawLine of source.split('\n')) {
+    const line = rawLine.trim();
+    if (!/^-?\s*uses:/.test(line)) continue;
+    const match = line.match(
+      /^-?\s*uses:\s*["']?([^"'\s#]+)["']?(?:\s+#.*)?$/,
+    );
+    if (!match) fail(`Malformed action reference in ${file}: ${line}`);
+    const action = match[1];
+    if (!action.startsWith('./') && !/@[0-9a-f]{40}$/.test(action)) {
+      fail(`External action is not pinned to a full SHA in ${file}: ${action}`);
+    }
   }
 }
 

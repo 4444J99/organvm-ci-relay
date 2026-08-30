@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   policy:
+    name: Relay trust policy
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -19,3 +20,4 @@ jobs:
         with:
           persist-credentials: false
       - run: node scripts/verify-policy.mjs
+      - run: node scripts/test-policy.mjs

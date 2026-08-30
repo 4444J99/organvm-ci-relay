@@ -7,11 +7,12 @@ on:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/relay-policy.yml"
       - ".github/workflows/relay-process-environment.yml"
       - "config/**"
       - "profiles/**"
       - "relay"
-      - "scripts/verify-policy.mjs"
+      - "scripts/**"
   workflow_dispatch:
     inputs:
       target:
@@ -40,8 +41,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: relay-${{ inputs.target || 'organvm/process-environment-enactment' }}-${{ inputs.profile || 'process-environment-enactment-v1' }}-${{ inputs.sha || 'ffebb6fa1020098e18020f6a4a845cf933c0df3c' }}
-  cancel-in-progress: true
+  group: >-
+    relay-${{ github.event_name == 'push' && github.sha || format('{0}-{1}-{2}', inputs.target, inputs.profile, inputs.sha) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   authorize:
@@ -297,11 +299,28 @@ jobs:
             const candidate = entry.regression_candidate;
             if (!candidate) continue;
             const implementation = config.profiles?.[candidate.profile];
+            if (entry.visibility !== 'public' ||
+                !/^[0-9]+$/.test(String(entry.stable_repository_id))) {
+              throw new Error(`Invalid regression target identity for ${repository}`);
+            }
+            if (!/^[0-9a-f]{40}$/.test(candidate.sha)) {
+              throw new Error(`Invalid regression SHA for ${repository}`);
+            }
             if (!implementation || implementation.family !== 'python') {
               throw new Error(`Invalid regression profile for ${repository}`);
             }
-            if (!entry.profiles.includes(candidate.profile)) {
+            if (!Array.isArray(entry.profiles) ||
+                !entry.profiles.includes(candidate.profile)) {
               throw new Error(`Unauthorized regression profile for ${repository}`);
+            }
+            if (!Array.isArray(candidate.python_versions) ||
+                candidate.python_versions.length === 0 ||
+                new Set(candidate.python_versions).size !==
+                  candidate.python_versions.length ||
+                candidate.python_versions.some(
+                  (version) => !['3.11', '3.12'].includes(version)
+                )) {
+              throw new Error(`Invalid Python regression matrix for ${repository}`);
             }
             for (const pythonVersion of candidate.python_versions) {
               include.push({
@@ -536,13 +555,27 @@ jobs:
             source_checkout_verified: allPassed,
             tests_and_assertions_executed: allPassed,
             aggregate: allPassed ? 'success' : 'error',
+            reproducibility: {
+              source_revisions: 'exact-sha',
+              dependency_environment: family === 'python'
+                ? 'networked-profile-defined-non-hermetic'
+                : 'runner-toolchain-profile-defined'
+            },
             generated_at: new Date().toISOString(),
             observations: 'Untrusted artifacts are not inputs to this receipt.'
           };
           fs.writeFileSync(process.env.receipt_file,
             JSON.stringify(receipt, null, 2) + '\n');
           NODE
-          sha256sum "$receipt_file" > "$receipt_file.sha256"
+          relative_receipt="${receipt_file#ledger/}"
+          (
+            cd ledger
+            sha256sum "$relative_receipt"
+          ) > "$receipt_file.sha256"
+          (
+            cd ledger
+            sha256sum -c "$relative_receipt.sha256"
+          )
           printf 'receipt_file=%s\n' "$receipt_file" >> "$GITHUB_OUTPUT"
 
       - name: Upload canonical receipt pair
