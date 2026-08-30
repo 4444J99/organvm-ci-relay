@@ -31,3 +31,7 @@ diff -u <(printf '000:third=3\n001:second=2\n') posix-omit.txt
 diff -u \
   <(printf '000:third=3\n001:second=2\n002:first=replaced\n') \
   posix-replace.txt
+
+cat posix-edge.txt posix-replicate.txt posix-append.txt \
+  posix-omit.txt posix-replace.txt > posix-output.txt
+shasum -a 256 posix-output.txt | tee posix-output.sha256
