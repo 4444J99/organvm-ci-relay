@@ -88,12 +88,18 @@ jobs:
           const repository = process.env.TARGET_REPO;
           const profile = process.env.TARGET_PROFILE;
           const entry = config.targets?.[repository];
+          const implementedProfiles = new Set([
+            'process-environment-enactment-v1'
+          ]);
 
           if (!entry || entry.visibility !== 'public') {
             throw new Error(`Target is not an allowlisted public repository: ${repository}`);
           }
           if (!Array.isArray(entry.profiles) || !entry.profiles.includes(profile)) {
             throw new Error(`Profile ${profile} is not allowed for ${repository}`);
+          }
+          if (!implementedProfiles.has(profile)) {
+            throw new Error(`Profile has no trusted workflow implementation: ${profile}`);
           }
           if (!/^[0-9]+$/.test(String(entry.stable_repository_id))) {
             throw new Error(`Invalid stable_repository_id for ${repository}`);
@@ -159,7 +165,6 @@ jobs:
 
       - id: validate
         name: Compile, execute, and assert POSIX behavior
-        continue-on-error: true
         working-directory: target
         shell: bash
         run: |
@@ -210,11 +215,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Enforce POSIX result
-        if: steps.validate.outcome != 'success'
-        shell: bash
-        run: exit 1
-
   windows:
     name: Windows / windows-latest
     needs: authorize
@@ -244,7 +244,6 @@ jobs:
 
       - id: validate
         name: Compile, execute, and assert Windows behavior
-        continue-on-error: true
         working-directory: target
         shell: pwsh
         run: |
@@ -306,11 +305,6 @@ jobs:
             target/windows-output.sha256
           if-no-files-found: warn
           retention-days: 7
-
-      - name: Enforce Windows result
-        if: steps.validate.outcome != 'success'
-        shell: pwsh
-        run: exit 1
 
   receipt:
     name: Canonical isolated receipt
