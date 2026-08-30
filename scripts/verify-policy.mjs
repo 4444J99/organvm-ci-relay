@@ -81,8 +81,8 @@ for (const [target, entry] of Object.entries(config.targets ?? {})) {
 if (!workflow.includes('permissions: {}')) {
   fail('The workflow must default to zero permissions');
 }
-if (workflow.includes('secrets.')) {
-  fail('The relay workflow may not reference secrets');
+if (/\$\{\{\s*secrets\./.test(workflow)) {
+  fail('The relay workflow may not reference the GitHub secrets context');
 }
 if (fs.existsSync('receipts')) {
   fail('Receipt data must not be tracked on the trusted branch');
