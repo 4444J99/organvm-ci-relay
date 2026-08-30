@@ -43,8 +43,22 @@ its stable repository ID, public visibility, and supported profiles. The
 workflow then accepts any full 40-character commit SHA for that target; no
 workflow edit is needed per commit.
 
-Profiles remain trusted code in the relay. Runtime inputs never accept a runner
-label, shell command, secret, artifact path, or arbitrary workflow.
+Profiles are executable, relay-owned files under `profiles/`. Runtime inputs
+never accept a runner label, shell command, secret, artifact path, or arbitrary
+workflow. The registry binds each target to a stable GitHub repository ID and
+to a reviewed profile family.
+
+Registered execution targets:
+
+| Target | Profile |
+| --- | --- |
+| `organvm/process-environment-enactment` | `process-environment-enactment-v1` |
+| `organvm/learning-resources` | `python-ruff-pytest-v1` |
+| `organvm/organvm-engine` | `organvm-engine-v1` |
+
+Every trust-root push runs the known-good cross-platform process canary plus
+the exact registered Python regression candidates. Manual dispatch remains the
+four-variable path for any allowlisted candidate SHA.
 
 ## Write isolation
 
@@ -64,6 +78,8 @@ status-signing root. Cross-repository status publication remains deferred.
   `permissions: {}`.
 - Only standard GitHub-hosted runners are used.
 - GitHub-owned actions are pinned to full commit SHAs.
+- Trust-root pushes replay exact registered regression candidates before the
+  revision is treated as operational evidence.
 - Canonical receipts are generated on a fresh runner from authorization outputs
   and job results; the receipt job never downloads or executes target artifacts.
 - Durable receipt commits go only to the `receipts` branch, never trusted `main`.
