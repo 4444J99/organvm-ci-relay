@@ -1,8 +1,9 @@
 name: Relay policy
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, edited]
   push:
     branches: [main]
   workflow_dispatch:
@@ -12,10 +13,141 @@ permissions:
 
 jobs:
   policy:
+    name: ${{ github.event_name == 'pull_request_target' && 'Relay trust policy' || 'Relay trust policy self-check' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check out the trusted policy source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          fetch-depth: 1
           persist-credentials: false
-      - run: node scripts/verify-policy.mjs
+
+      # pull_request_target loads this workflow from the protected base branch.
+      # The candidate checkout is data only: no candidate script, action, hook,
+      # package manager, or other executable is invoked by this job.
+      - name: Fetch the exact pull-request head and freeze executable policy
+        if: github.event_name == 'pull_request_target'
+        shell: bash
+        env:
+          BASE_REPOSITORY: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$BASE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+          [[ "$BASE_REF" == main ]]
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$HEAD_REPOSITORY" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$ ]]
+          [[ "$(git -C trusted rev-parse HEAD)" == "$BASE_SHA" ]]
+
+          mkdir candidate-repository
+          git -C candidate-repository init --bare
+          git -C candidate-repository remote add origin "https://github.com/${HEAD_REPOSITORY}.git"
+          GIT_TERMINAL_PROMPT=0 git -C candidate-repository \
+            -c credential.helper= -c protocol.version=2 \
+            fetch --no-tags --filter=blob:none --depth=1 origin "$HEAD_SHA"
+          [[ "$(git -C candidate-repository rev-parse FETCH_HEAD)" == "$HEAD_SHA" ]]
+
+          trust_paths=(
+            .github/workflows
+            .github/workflows/relay-policy.yml
+            .github/workflows/relay-process-environment.yml
+            scripts/verify-policy.mjs
+            scripts/test-policy.mjs
+            relay
+            profiles
+          )
+          for trust_path in "${trust_paths[@]}"; do
+            base_entry="$(git -C trusted ls-tree "$BASE_SHA" -- "$trust_path")"
+            head_entry="$(git -C candidate-repository ls-tree "$HEAD_SHA" -- "$trust_path")"
+            if [[ -z "$base_entry" || "$head_entry" != "$base_entry" ]]; then
+              echo "::error::Frozen executable trust root changed: $trust_path" >&2
+              exit 1
+            fi
+          done
+
+          attribute_paths=(
+            .gitattributes
+            .github/.gitattributes
+            config/.gitattributes
+            scripts/.gitattributes
+          )
+          for attribute_path in "${attribute_paths[@]}"; do
+            base_entry="$(git -C trusted ls-tree "$BASE_SHA" -- "$attribute_path")"
+            head_entry="$(git -C candidate-repository ls-tree "$HEAD_SHA" -- "$attribute_path")"
+            if [[ "$head_entry" != "$base_entry" ]]; then
+              echo "::error::Git attributes governing the trust root changed: $attribute_path" >&2
+              exit 1
+            fi
+          done
+
+          config_metadata="$(mktemp)"
+          trap 'rm -f "$config_metadata"' EXIT
+          contents_auth=()
+          if [[ "$HEAD_REPOSITORY" == "$BASE_REPOSITORY" ]]; then
+            contents_auth=(--header "Authorization: Bearer $GITHUB_TOKEN")
+          fi
+          curl --fail --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --header 'Accept: application/vnd.github.object+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "${contents_auth[@]}" \
+            "$GITHUB_API_URL/repos/$HEAD_REPOSITORY/contents/config/targets.json?ref=$HEAD_SHA" \
+            > "$config_metadata"
+          mapfile -t config_api < <(node - "$config_metadata" <<'NODE'
+          const fs = require('fs');
+          const metadata = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (Array.isArray(metadata) || metadata?.type !== 'file' ||
+              metadata.path !== 'config/targets.json' ||
+              !/^[0-9a-f]{40,64}$/.test(metadata.sha ?? '') ||
+              !Number.isSafeInteger(metadata.size) || metadata.size < 1 ||
+              metadata.size > 2 * 1024 * 1024) {
+            throw new Error('Candidate registry metadata is not one bounded regular blob');
+          }
+          process.stdout.write(`${metadata.sha}\n${metadata.size}\n`);
+          NODE
+          )
+          [[ "${#config_api[@]}" == 2 ]]
+          config_api_oid="${config_api[0]}"
+          config_size="${config_api[1]}"
+
+          config_entry="$(git -C candidate-repository \
+            ls-tree "$HEAD_SHA" -- config/targets.json)"
+          read -r config_mode config_type config_oid config_path <<< "$config_entry"
+          [[ "$config_mode" == 100644 ]]
+          [[ "$config_type" == blob ]]
+          [[ "$config_oid" =~ ^[0-9a-f]{40,64}$ ]]
+          [[ "$config_path" == config/targets.json ]]
+          [[ "$config_oid" == "$config_api_oid" ]]
+
+          mkdir candidate
+          cp -a trusted/.github trusted/config trusted/profiles trusted/scripts candidate/
+          cp -p trusted/relay candidate/relay
+          if [[ -f trusted/.gitattributes ]]; then
+            cp -p trusted/.gitattributes candidate/.gitattributes
+          fi
+          GIT_TERMINAL_PROMPT=0 git -C candidate-repository \
+            -c credential.helper= -c protocol.version=2 cat-file blob \
+            "$HEAD_SHA:config/targets.json" > candidate/config/targets.json
+          [[ "$(wc -c < candidate/config/targets.json)" == "$config_size" ]]
+          [[ "$(git -C candidate-repository hash-object \
+            ../candidate/config/targets.json)" == "$config_oid" ]]
+
+      - name: Verify the candidate with the trusted base verifier
+        shell: bash
+        env:
+          CANDIDATE_ROOT: ${{ github.event_name == 'pull_request_target' && 'candidate' || 'trusted' }}
+        run: node trusted/scripts/verify-policy.mjs --candidate-root "$CANDIDATE_ROOT" --base-root trusted
+
+      - name: Regress the trusted base verifier
+        shell: bash
+        run: node trusted/scripts/test-policy.mjs --base-root trusted

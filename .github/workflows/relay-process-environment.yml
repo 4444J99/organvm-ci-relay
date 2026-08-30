@@ -1,30 +1,34 @@
-name: "Relay: process-environment enactment"
+name: "Relay: allowlisted exact-SHA CI"
 
-run-name: >-
-  relay ${{ inputs.profile }} @ ${{ inputs.sha }} via ${{ inputs.lead_provider }}
+run-name: relay exact-SHA execution / ${{ github.event_name }}
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/relay-policy.yml"
+      - ".github/workflows/relay-process-environment.yml"
+      - "config/**"
+      - "profiles/**"
+      - "relay"
+      - "scripts/**"
   workflow_dispatch:
     inputs:
       target:
         description: Allowlisted public owner/repository
         required: true
-        default: organvm/process-environment-enactment
         type: string
       sha:
         description: Full 40-character lowercase commit SHA
         required: true
-        default: ffebb6fa1020098e18020f6a4a845cf933c0df3c
         type: string
       profile:
         description: Allowlisted relay-owned validation profile
         required: true
-        default: process-environment-enactment-v1
         type: string
       lead_provider:
         description: Provenance label only; never grants access
         required: true
-        default: operator
         type: string
 
 # No target-repository credential is available to test jobs. Artifact transport
@@ -32,8 +36,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: relay-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.sha }}
-  cancel-in-progress: true
+  group: >-
+    relay-${{ github.event_name == 'push' && github.sha || format('{0}-{1}-{2}', inputs.target, inputs.profile, inputs.sha) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   authorize:
@@ -49,21 +54,73 @@ jobs:
       profile: ${{ steps.allow.outputs.profile }}
       sha: ${{ steps.allow.outputs.sha }}
       stable_repository_id: ${{ steps.allow.outputs.stable_repository_id }}
+      profile_family: ${{ steps.allow.outputs.profile_family }}
+      python_versions: ${{ steps.allow.outputs.python_versions }}
+      node_version: ${{ steps.allow.outputs.node_version }}
+      runtime_json: ${{ steps.allow.outputs.runtime_json }}
       lead_provider: ${{ steps.allow.outputs.lead_provider }}
+      relay_sha: ${{ steps.allow.outputs.relay_sha }}
     steps:
       - name: Check out trusted relay configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
+      - id: resolve
+        name: Resolve explicit dispatch or data-only push canary
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_SHA: ${{ inputs.sha }}
+          INPUT_PROFILE: ${{ inputs.profile }}
+          INPUT_LEAD_PROVIDER: ${{ inputs.lead_provider }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('config/targets.json', 'utf8'));
+          const canary = config.canary;
+          if (!canary || Array.isArray(canary) || typeof canary !== 'object' ||
+              JSON.stringify(Object.keys(canary).sort()) !==
+                JSON.stringify(['lead_provider', 'profile', 'sha', 'target'])) {
+            throw new Error('Relay canary must be one exact data-only record');
+          }
+          const selected = process.env.EVENT_NAME === 'push'
+            ? canary
+            : process.env.EVENT_NAME === 'workflow_dispatch'
+              ? {
+                target: process.env.INPUT_TARGET,
+                sha: process.env.INPUT_SHA,
+                profile: process.env.INPUT_PROFILE,
+                lead_provider: process.env.INPUT_LEAD_PROVIDER
+              }
+              : null;
+          if (!selected) throw new Error(`Unsupported relay event: ${process.env.EVENT_NAME}`);
+          if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/.test(selected.target) ||
+              !/^[0-9a-f]{40}$/.test(selected.sha) ||
+              !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(selected.profile) ||
+              !/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(selected.lead_provider)) {
+            throw new Error('Relay selection contains an invalid target, SHA, profile, or provenance label');
+          }
+          const entry = config.targets?.[selected.target];
+          if (!entry || !Array.isArray(entry.profiles) ||
+              !entry.profiles.includes(selected.profile)) {
+            throw new Error('Relay selection is not an allowlisted target/profile pair');
+          }
+          for (const [key, value] of Object.entries(selected)) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+          }
+          NODE
+
       - id: allow
         name: Enforce target, profile, and SHA allowlists
         shell: bash
         env:
-          TARGET_REPO: ${{ inputs.target }}
-          TARGET_SHA: ${{ inputs.sha }}
-          TARGET_PROFILE: ${{ inputs.profile }}
-          LEAD_PROVIDER: ${{ inputs.lead_provider }}
+          TARGET_REPO: ${{ steps.resolve.outputs.target }}
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+          TARGET_PROFILE: ${{ steps.resolve.outputs.profile }}
+          LEAD_PROVIDER: ${{ steps.resolve.outputs.lead_provider }}
           GITHUB_API_URL: ${{ github.api_url }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -88,18 +145,71 @@ jobs:
           const repository = process.env.TARGET_REPO;
           const profile = process.env.TARGET_PROFILE;
           const entry = config.targets?.[repository];
-          const implementedProfiles = new Set([
-            'process-environment-enactment-v1'
-          ]);
+          const implementation = config.profiles?.[profile];
 
+          if (config.schema !== 'organvm.relay-targets.v4' ||
+              config.policy?.require_public_source !== true ||
+              config.policy?.require_exact_40_hex_sha !== true ||
+              config.policy?.deny_floating_refs !== true ||
+              config.policy?.receipt_branch !== 'receipts' ||
+              !Array.isArray(config.policy?.allowed_secrets) ||
+              config.policy.allowed_secrets.length !== 0) {
+            throw new Error('Relay registry policy is not fail-closed');
+          }
           if (!entry || entry.visibility !== 'public') {
             throw new Error(`Target is not an allowlisted public repository: ${repository}`);
           }
           if (!Array.isArray(entry.profiles) || !entry.profiles.includes(profile)) {
             throw new Error(`Profile ${profile} is not allowed for ${repository}`);
           }
-          if (!implementedProfiles.has(profile)) {
-            throw new Error(`Profile has no trusted workflow implementation: ${profile}`);
+          if (!implementation ||
+              !['process-environment', 'python'].includes(implementation.family)) {
+            throw new Error(`Profile has no trusted implementation: ${profile}`);
+          }
+          const exactPythonVersions = new Set(['3.11.16', '3.12.14']);
+          const exactNodeVersions = new Set(['22.23.2']);
+          let pythonVersions = ['3.12.14'];
+          let nodeVersion = '';
+          let runtime = {python_versions: [], node_version: null};
+          if (implementation.family === 'python') {
+            if (JSON.stringify(Object.keys(implementation).sort()) !==
+                  JSON.stringify(['description', 'family', 'runtime']) ||
+                !implementation.runtime || Array.isArray(implementation.runtime) ||
+                typeof implementation.runtime !== 'object') {
+              throw new Error(`Invalid frozen Python profile metadata: ${profile}`);
+            }
+            const runtimeKeys = Object.keys(implementation.runtime).sort();
+            const expectedRuntimeKeys = implementation.runtime.node_version === undefined
+              ? ['python_versions']
+              : ['node_version', 'python_versions'];
+            if (JSON.stringify(runtimeKeys) !== JSON.stringify(expectedRuntimeKeys) ||
+                !Array.isArray(implementation.runtime.python_versions) ||
+                implementation.runtime.python_versions.length === 0 ||
+                new Set(implementation.runtime.python_versions).size !==
+                  implementation.runtime.python_versions.length ||
+                implementation.runtime.python_versions.some(
+                  (version) => !exactPythonVersions.has(version)
+                ) ||
+                (implementation.runtime.node_version !== undefined &&
+                  !exactNodeVersions.has(implementation.runtime.node_version))) {
+              throw new Error(`Invalid frozen runtime metadata: ${profile}`);
+            }
+            pythonVersions = implementation.runtime.python_versions;
+            nodeVersion = implementation.runtime.node_version ?? '';
+            runtime = {
+              python_versions: pythonVersions,
+              node_version: nodeVersion || null
+            };
+          } else if (JSON.stringify(Object.keys(implementation).sort()) !==
+              JSON.stringify(['description', 'family'])) {
+            throw new Error(`Invalid process-environment profile metadata: ${profile}`);
+          }
+          if (!fs.existsSync(`profiles/${profile}.sh`)) {
+            throw new Error(`Relay-owned profile file is missing: ${profile}`);
+          }
+          if (implementation.family === 'process-environment' &&
+              !fs.existsSync(`profiles/${profile}.ps1`)) {
+            throw new Error(`Windows profile file is missing: ${profile}`);
           }
           if (!/^[0-9]+$/.test(String(entry.stable_repository_id))) {
             throw new Error(`Invalid stable_repository_id for ${repository}`);
@@ -120,9 +230,14 @@ jobs:
             repository: name,
             full_name: repository,
             profile,
+            profile_family: implementation.family,
+            python_versions: JSON.stringify(pythonVersions),
+            node_version: nodeVersion,
+            runtime_json: JSON.stringify(runtime),
             sha: process.env.TARGET_SHA,
             stable_repository_id: String(entry.stable_repository_id),
-            lead_provider: process.env.LEAD_PROVIDER
+            lead_provider: process.env.LEAD_PROVIDER,
+            relay_sha: process.env.GITHUB_SHA
           };
           fs.appendFileSync(
             process.env.GITHUB_OUTPUT,
@@ -132,6 +247,7 @@ jobs:
 
   posix:
     name: POSIX / ${{ matrix.os }}
+    if: needs.authorize.outputs.profile_family == 'process-environment'
     needs: authorize
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
@@ -148,61 +264,32 @@ jobs:
       TARGET_REPO: ${{ needs.authorize.outputs.full_name }}
       TARGET_SHA: ${{ needs.authorize.outputs.sha }}
       TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
+      RELAY_SHA: ${{ needs.authorize.outputs.relay_sha }}
       RECEIPT_LABEL: ${{ matrix.receipt_label }}
     steps:
-      - name: Fetch the allowlisted repository by exact SHA
+      - name: Fetch trusted profile and target anonymously by exact SHA
         shell: bash
         run: |
           set -euo pipefail
-          mkdir target
-          git -C target init
-          git -C target remote add origin \
-            "https://github.com/${TARGET_REPO}.git"
-          git -C target -c protocol.version=2 fetch \
-            --no-tags --depth=1 origin "$TARGET_SHA"
-          git -C target checkout --detach FETCH_HEAD
-          [[ "$(git -C target rev-parse HEAD)" == "$TARGET_SHA" ]]
+          for spec in \
+            "relay-trust|$GITHUB_REPOSITORY|$RELAY_SHA" \
+            "target|$TARGET_REPO|$TARGET_SHA"
+          do
+            IFS='|' read -r directory repository revision <<< "$spec"
+            mkdir "$directory"
+            git -C "$directory" init
+            git -C "$directory" remote add origin "https://github.com/${repository}.git"
+            git -C "$directory" -c credential.helper= -c protocol.version=2 \
+              fetch --no-tags --depth=1 origin "$revision"
+            git -C "$directory" checkout --detach FETCH_HEAD
+            [[ "$(git -C "$directory" rev-parse HEAD)" == "$revision" ]]
+          done
 
       - id: validate
-        name: Compile, execute, and assert POSIX behavior
+        name: Execute relay-owned POSIX profile
         working-directory: target
         shell: bash
-        run: |
-          set -euo pipefail
-          cc -Wall -Wextra -pedantic -std=c99 \
-            posix-envp-enactment.c -o posix-envp-enactment
-
-          ./posix-envp-enactment seed-edge | tee posix-edge.txt
-          grep -Fx '000:some-other=values' posix-edge.txt
-          grep -Fx '001:NAME+some-other=value+values' posix-edge.txt
-          grep -Fx '002:=empty-name' posix-edge.txt
-          grep -Fx '003:noequals' posix-edge.txt
-          grep -Fx '004:name=value=with=equals' posix-edge.txt
-          grep -Fx '005:dup=one' posix-edge.txt
-          grep -Fx '006:dup=two' posix-edge.txt
-          grep -Fx '007:NAME=value' posix-edge.txt
-          if grep -F 'TAIL=x' posix-edge.txt; then exit 1; fi
-
-          ./posix-envp-enactment seed-basic replicate | tee posix-replicate.txt
-          diff -u <(printf '000:third=3\n001:first=1\n002:second=2\n') \
-            posix-replicate.txt
-
-          ./posix-envp-enactment seed-basic append | tee posix-append.txt
-          diff -u \
-            <(printf '000:third=3\n001:first=1\n002:second=2\n003:added=entry\n') \
-            posix-append.txt
-
-          ./posix-envp-enactment seed-basic omit | tee posix-omit.txt
-          diff -u <(printf '000:third=3\n001:second=2\n') posix-omit.txt
-
-          ./posix-envp-enactment seed-basic replace | tee posix-replace.txt
-          diff -u \
-            <(printf '000:third=3\n001:second=2\n002:first=replaced\n') \
-            posix-replace.txt
-
-          cat posix-edge.txt posix-replicate.txt posix-append.txt \
-            posix-omit.txt posix-replace.txt > posix-output.txt
-          shasum -a 256 posix-output.txt | tee posix-output.sha256
+        run: bash "../relay-trust/profiles/$TARGET_PROFILE.sh"
 
       - name: Upload untrusted POSIX observations
         if: always()
@@ -217,6 +304,7 @@ jobs:
 
   windows:
     name: Windows / windows-latest
+    if: needs.authorize.outputs.profile_family == 'process-environment'
     needs: authorize
     runs-on: windows-latest
     timeout-minutes: 10
@@ -224,76 +312,34 @@ jobs:
       TARGET_REPO: ${{ needs.authorize.outputs.full_name }}
       TARGET_SHA: ${{ needs.authorize.outputs.sha }}
       TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
+      RELAY_SHA: ${{ needs.authorize.outputs.relay_sha }}
       RECEIPT_LABEL: windows
     steps:
-      - name: Fetch the allowlisted repository by exact SHA
+      - name: Fetch trusted profile and target anonymously by exact SHA
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Path target | Out-Null
-          git -C target init
-          git -C target remote add origin `
-            "https://github.com/$env:TARGET_REPO.git"
-          git -C target -c protocol.version=2 fetch `
-            --no-tags --depth=1 origin $env:TARGET_SHA
-          git -C target checkout --detach FETCH_HEAD
-          $actual = git -C target rev-parse HEAD
-          if ($actual -cne $env:TARGET_SHA) {
-            throw "Fetched $actual instead of $env:TARGET_SHA"
-          }
-
-      - id: validate
-        name: Compile, execute, and assert Windows behavior
-        working-directory: target
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          @'
-          @echo off
-          set "VSPATH="
-          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
-          if not defined VSPATH exit /b 1
-          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          cl /nologo /W4 /WX /std:c17 windows-lpenvironment-enactment.c
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          windows-lpenvironment-enactment.exe > windows-output.txt
-          set "HARNESS_EXIT=%ERRORLEVEL%"
-          type windows-output.txt
-          if not "%HARNESS_EXIT%"=="0" exit /b %HARNESS_EXIT%
-          '@ | Set-Content -LiteralPath relay-build-and-run.cmd -Encoding ascii
-          & cmd.exe /d /c relay-build-and-run.cmd
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows build or harness exited $LASTEXITCODE"
-          }
-
-          $lines = @(Get-Content -LiteralPath windows-output.txt)
-          if ($lines.Count -ne 18) {
-            throw "Expected 18 observation lines; found $($lines.Count)"
-          }
-
-          $expected = [ordered]@{
-            'CASE:inherit-null-lpEnvironment' = 1
-            'CASE:custom-base-block' = 1
-            'CASE:custom-append-block' = 1
-            'CASE:custom-omit-block' = 1
-            'CASE:custom-replace-block' = 1
-            'PM_INHERITED=parent' = 1
-            'PM_FIRST=1' = 2
-            'PM_SECOND=2' = 4
-            'PM_THIRD=3' = 4
-            'PM_ADDED=entry' = 1
-            'PM_FIRST=replaced' = 1
-          }
-          foreach ($entry in $expected.GetEnumerator()) {
-            $actual = @($lines | Where-Object { $_ -ceq $entry.Key }).Count
-            if ($actual -ne $entry.Value) {
-              throw "Expected '$($entry.Key)' $($entry.Value) time(s); found $actual"
+          $sources = @(
+            @{ Directory = 'relay-trust'; Repository = $env:GITHUB_REPOSITORY; Revision = $env:RELAY_SHA },
+            @{ Directory = 'target'; Repository = $env:TARGET_REPO; Revision = $env:TARGET_SHA }
+          )
+          foreach ($source in $sources) {
+            New-Item -ItemType Directory -Path $source.Directory | Out-Null
+            git -C $source.Directory init
+            git -C $source.Directory remote add origin "https://github.com/$($source.Repository).git"
+            git -C $source.Directory -c credential.helper= -c protocol.version=2 fetch --no-tags --depth=1 origin $source.Revision
+            git -C $source.Directory checkout --detach FETCH_HEAD
+            $actual = git -C $source.Directory rev-parse HEAD
+            if ($actual -cne $source.Revision) {
+              throw "Fetched $actual instead of $($source.Revision)"
             }
           }
 
-          $hash = (Get-FileHash windows-output.txt -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  windows-output.txt" | Set-Content windows-output.sha256
+      - id: validate
+        name: Execute relay-owned Windows profile
+        working-directory: target
+        shell: pwsh
+        run: "& \"..\\relay-trust\\profiles\\$env:TARGET_PROFILE.ps1\""
 
       - name: Upload untrusted Windows observations
         if: always()
@@ -306,10 +352,342 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  prepare_regression:
+    name: Prepare trusted regression matrix
+    if: github.event_name == 'push'
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('config/targets.json', 'utf8'));
+          if (config.schema !== 'organvm.relay-targets.v4' ||
+              config.policy?.receipt_branch !== 'receipts' ||
+              !Array.isArray(config.policy?.allowed_secrets) ||
+              config.policy.allowed_secrets.length !== 0) {
+            throw new Error('Relay regression registry is not fail-closed');
+          }
+          const include = [];
+          const MAX_TARGET_RECORDS = 64;
+          const MAX_REGRESSION_JOBS = 32;
+          const exactPythonVersions = new Set(['3.11.16', '3.12.14']);
+          const exactNodeVersions = new Set(['22.23.2']);
+          const targetRecords = Object.entries(config.targets ?? {});
+          if (targetRecords.length > MAX_TARGET_RECORDS) {
+            throw new Error(`Relay registry may contain at most ${MAX_TARGET_RECORDS} target records`);
+          }
+          const targetNames = new Set();
+          const stableRepositoryIds = new Set();
+          for (const [repository, entry] of targetRecords) {
+            const normalizedRepository = repository.toLowerCase();
+            if (targetNames.has(normalizedRepository)) {
+              throw new Error(`Case-insensitive duplicate target identity: ${repository}`);
+            }
+            targetNames.add(normalizedRepository);
+            const stableRepositoryId = String(entry?.stable_repository_id ?? '');
+            if (!/^[1-9][0-9]*$/.test(stableRepositoryId)) {
+              throw new Error(`Invalid stable_repository_id for ${repository}`);
+            }
+            if (stableRepositoryIds.has(stableRepositoryId)) {
+              throw new Error(`Duplicate stable_repository_id: ${stableRepositoryId}`);
+            }
+            stableRepositoryIds.add(stableRepositoryId);
+            const candidate = entry?.regression_candidate;
+            if (!candidate) continue;
+            const implementation = config.profiles?.[candidate.profile];
+            if (!candidate || Array.isArray(candidate) ||
+                typeof candidate !== 'object' ||
+                JSON.stringify(Object.keys(candidate).sort()) !==
+                  JSON.stringify(['profile', 'sha'])) {
+              throw new Error(`Invalid regression candidate record for ${repository}`);
+            }
+            if (entry.visibility !== 'public') {
+              throw new Error(`Invalid regression target identity for ${repository}`);
+            }
+            if (!/^[0-9a-f]{40}$/.test(candidate.sha)) {
+              throw new Error(`Invalid regression SHA for ${repository}`);
+            }
+            if (!implementation || implementation.family !== 'python') {
+              throw new Error(`Invalid regression profile for ${repository}`);
+            }
+            if (!Array.isArray(entry.profiles) ||
+                !entry.profiles.includes(candidate.profile)) {
+              throw new Error(`Unauthorized regression profile for ${repository}`);
+            }
+            const runtime = implementation.runtime;
+            const runtimeKeys = runtime && !Array.isArray(runtime) &&
+                typeof runtime === 'object'
+              ? Object.keys(runtime).sort()
+              : [];
+            const expectedRuntimeKeys = runtime?.node_version === undefined
+              ? ['python_versions']
+              : ['node_version', 'python_versions'];
+            if (JSON.stringify(Object.keys(implementation).sort()) !==
+                  JSON.stringify(['description', 'family', 'runtime']) ||
+                JSON.stringify(runtimeKeys) !== JSON.stringify(expectedRuntimeKeys) ||
+                !Array.isArray(runtime?.python_versions) ||
+                runtime.python_versions.length === 0 ||
+                new Set(runtime.python_versions).size !== runtime.python_versions.length ||
+                runtime.python_versions.some(
+                  (version) => !exactPythonVersions.has(version)
+                ) ||
+                (runtime.node_version !== undefined &&
+                  !exactNodeVersions.has(runtime.node_version))) {
+              throw new Error(`Invalid frozen regression runtime for ${repository}`);
+            }
+            for (const pythonVersion of runtime.python_versions) {
+              include.push({
+                repository,
+                stable_repository_id: stableRepositoryId,
+                sha: candidate.sha,
+                profile: candidate.profile,
+                python_version: pythonVersion,
+                node_version: runtime.node_version ?? ''
+              });
+              if (include.length > MAX_REGRESSION_JOBS) {
+                throw new Error(`Regression matrix may contain at most ${MAX_REGRESSION_JOBS} jobs`);
+              }
+            }
+          }
+          if (include.length === 0) throw new Error('Regression matrix is empty');
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `matrix=${JSON.stringify({include})}\n`
+          );
+          NODE
+
+  python_dispatch:
+    name: Dispatch / Python ${{ matrix.python-version }}
+    if: needs.authorize.outputs.profile_family == 'python'
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        python-version: ${{ fromJSON(needs.authorize.outputs.python_versions) }}
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      PIP_NO_INPUT: "1"
+      TARGET_REPO: ${{ needs.authorize.outputs.full_name }}
+      TARGET_SHA: ${{ needs.authorize.outputs.sha }}
+      TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
+      RELAY_SHA: ${{ needs.authorize.outputs.relay_sha }}
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up exact optional Node runtime
+        if: needs.authorize.outputs.node_version != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ needs.authorize.outputs.node_version }}
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Fetch trusted profile and target anonymously by exact SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in \
+            "relay-trust|$GITHUB_REPOSITORY|$RELAY_SHA" \
+            "target|$TARGET_REPO|$TARGET_SHA"
+          do
+            IFS='|' read -r directory repository revision <<< "$spec"
+            mkdir "$directory"
+            git -C "$directory" init
+            git -C "$directory" remote add origin "https://github.com/${repository}.git"
+            git -C "$directory" -c credential.helper= -c protocol.version=2 \
+              fetch --no-tags --depth=1 origin "$revision"
+            git -C "$directory" checkout --detach FETCH_HEAD
+            [[ "$(git -C "$directory" rev-parse HEAD)" == "$revision" ]]
+          done
+
+      - name: Execute relay-owned Python profile
+        working-directory: target
+        shell: bash
+        run: bash "../relay-trust/profiles/$TARGET_PROFILE.sh"
+
+  python_regression:
+    name: Regression / ${{ matrix.repository }} / Python ${{ matrix.python_version }}
+    if: needs.prepare_regression.result == 'success'
+    needs: prepare_regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.prepare_regression.outputs.matrix) }}
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      PIP_NO_INPUT: "1"
+      TARGET_REPO: ${{ matrix.repository }}
+      TARGET_REPOSITORY_ID: ${{ matrix.stable_repository_id }}
+      TARGET_SHA: ${{ matrix.sha }}
+      TARGET_PROFILE: ${{ matrix.profile }}
+      RELAY_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ matrix.python_version }}
+
+      - name: Set up exact optional Node runtime
+        if: matrix.node_version != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ matrix.node_version }}
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Re-authorize live identity and fetch both exact revisions anonymously
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in \
+            "relay-trust|$GITHUB_REPOSITORY|$RELAY_SHA" \
+            "target|$TARGET_REPO|$TARGET_SHA"
+          do
+            IFS='|' read -r directory repository revision <<< "$spec"
+            mkdir "$directory"
+            git -C "$directory" init
+            git -C "$directory" remote add origin "https://github.com/${repository}.git"
+            git -C "$directory" -c credential.helper= -c protocol.version=2 \
+              fetch --no-tags --depth=1 origin "$revision"
+            git -C "$directory" checkout --detach FETCH_HEAD
+            [[ "$(git -C "$directory" rev-parse HEAD)" == "$revision" ]]
+          done
+          response_headers="$(mktemp)"
+          response_body="$(mktemp)"
+          trap 'rm -f "$response_headers" "$response_body"' EXIT
+          max_attempts=3
+          max_total_wait=180
+          total_wait=0
+
+          header_value() {
+            local header_name="$1"
+            awk -v name="$header_name" '
+              index(tolower($0), tolower(name) ":") == 1 {
+                sub(/^[^:]*:[[:space:]]*/, "")
+                sub(/\r$/, "")
+                value = $0
+              }
+              END { print value }
+            ' "$response_headers"
+          }
+
+          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            if ! status="$(curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --output "$response_body" \
+              --dump-header "$response_headers" \
+              --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$TARGET_REPO")"
+            then
+              echo '::error::Unauthenticated GitHub identity request failed at the transport layer' >&2
+              exit 1
+            fi
+
+            if [[ "$status" == 200 ]]; then
+              mv "$response_body" live-repository.json
+              break
+            fi
+            if [[ "$status" != 403 && "$status" != 429 ]]; then
+              echo "::error::GitHub identity request failed with HTTP $status" >&2
+              exit 1
+            fi
+            if (( attempt == max_attempts )); then
+              echo "::error::GitHub identity request exhausted $max_attempts attempts after HTTP $status" >&2
+              exit 1
+            fi
+
+            now="$(date +%s)"
+            delay=0
+            retry_after="$(header_value 'Retry-After')"
+            rate_limit_reset="$(header_value 'X-RateLimit-Reset')"
+
+            if [[ "$retry_after" =~ ^[0-9]+$ ]]; then
+              delay="$retry_after"
+              if (( delay < 1 )); then
+                delay=1
+              fi
+            elif [[ -n "$retry_after" ]]; then
+              retry_epoch="$(date --date="$retry_after" +%s 2>/dev/null || true)"
+              if [[ "$retry_epoch" =~ ^[0-9]+$ ]] &&
+                  (( retry_epoch >= now )); then
+                delay=$((retry_epoch - now + 1))
+              fi
+            fi
+            if [[ "$rate_limit_reset" =~ ^[0-9]+$ ]] &&
+                (( rate_limit_reset >= now )); then
+              reset_delay=$((rate_limit_reset - now + 1))
+              if (( reset_delay > delay )); then
+                delay="$reset_delay"
+              fi
+            fi
+            if (( delay < 1 )); then
+              delay=$((attempt * 60))
+            fi
+
+            remaining_wait=$((max_total_wait - total_wait))
+            if (( delay > remaining_wait )); then
+              echo "::error::GitHub requested a ${delay}s retry delay after HTTP $status; only ${remaining_wait}s remain in the retry budget" >&2
+              exit 1
+            fi
+            echo "::warning::GitHub identity request returned HTTP $status; retrying in ${delay}s (attempt $((attempt + 1))/$max_attempts)" >&2
+            sleep "$delay"
+            total_wait=$((total_wait + delay))
+          done
+          [[ -s live-repository.json ]]
+          node <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(
+            fs.readFileSync('relay-trust/config/targets.json', 'utf8')
+          );
+          const live = JSON.parse(fs.readFileSync('live-repository.json', 'utf8'));
+          const entry = config.targets?.[process.env.TARGET_REPO];
+          if (!entry || entry.visibility !== 'public') {
+            throw new Error('Regression target is not registered public source');
+          }
+          if (!entry.profiles.includes(process.env.TARGET_PROFILE)) {
+            throw new Error('Regression profile is not authorized');
+          }
+          if (String(entry.stable_repository_id) !== process.env.TARGET_REPOSITORY_ID ||
+              String(live.id) !== process.env.TARGET_REPOSITORY_ID ||
+              String(live.full_name).toLowerCase() !== process.env.TARGET_REPO.toLowerCase() ||
+              live.private !== false ||
+              live.visibility !== 'public') {
+            throw new Error('Live regression repository identity mismatch');
+          }
+          NODE
+
+      - name: Execute relay-owned Python profile
+        working-directory: target
+        shell: bash
+        run: bash "../relay-trust/profiles/$TARGET_PROFILE.sh"
   receipt:
     name: Canonical isolated receipt
     if: always() && needs.authorize.result == 'success'
-    needs: [authorize, posix, windows]
+    needs: [authorize, posix, windows, python_dispatch, prepare_regression, python_regression]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -320,11 +698,18 @@ jobs:
     env:
       POSIX_RESULT: ${{ needs.posix.result }}
       WINDOWS_RESULT: ${{ needs.windows.result }}
+      PYTHON_DISPATCH_RESULT: ${{ needs.python_dispatch.result }}
+      PREPARE_REGRESSION_RESULT: ${{ needs.prepare_regression.result }}
+      PYTHON_REGRESSION_RESULT: ${{ needs.python_regression.result }}
+      RELAY_EVENT_NAME: ${{ github.event_name }}
       TARGET_REPO: ${{ needs.authorize.outputs.full_name }}
       TARGET_SHA: ${{ needs.authorize.outputs.sha }}
       TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
+      TARGET_PROFILE_FAMILY: ${{ needs.authorize.outputs.profile_family }}
+      TARGET_RUNTIME_JSON: ${{ needs.authorize.outputs.runtime_json }}
       TARGET_REPOSITORY_ID: ${{ needs.authorize.outputs.stable_repository_id }}
       LEAD_PROVIDER: ${{ needs.authorize.outputs.lead_provider }}
+      REGRESSION_MATRIX_JSON: ${{ needs.prepare_regression.outputs.matrix }}
     steps:
       - name: Check out the isolated receipt ledger
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -353,15 +738,35 @@ jobs:
           export receipt_file
           node <<'NODE'
           const fs = require('fs');
-          const allPassed = process.env.POSIX_RESULT === 'success' &&
-            process.env.WINDOWS_RESULT === 'success';
+          const family = process.env.TARGET_PROFILE_FAMILY;
+          const isTrustRootPush = process.env.RELAY_EVENT_NAME === 'push';
+          const runtime = JSON.parse(process.env.TARGET_RUNTIME_JSON);
+          const regressionMatrix = process.env.REGRESSION_MATRIX_JSON
+            ? JSON.parse(process.env.REGRESSION_MATRIX_JSON)
+            : null;
+          const regressionsPassed = !isTrustRootPush ||
+            (process.env.PREPARE_REGRESSION_RESULT === 'success' &&
+             process.env.PYTHON_REGRESSION_RESULT === 'success');
+          let allPassed = false;
+          if (family === 'process-environment') {
+            allPassed = process.env.POSIX_RESULT === 'success' &&
+              process.env.WINDOWS_RESULT === 'success' &&
+              regressionsPassed;
+          } else if (family === 'python') {
+            allPassed = process.env.PYTHON_DISPATCH_RESULT === 'success' &&
+              regressionsPassed;
+          } else {
+            throw new Error(`Unknown profile family: ${family}`);
+          }
           const receipt = {
-            schema: 'organvm-ci-relay-receipt/v1',
+            schema: 'organvm-ci-relay-receipt/v2',
             target: {
               stable_repository_id: process.env.TARGET_REPOSITORY_ID,
               repository: process.env.TARGET_REPO,
               sha: process.env.TARGET_SHA,
-              profile: process.env.TARGET_PROFILE
+              profile: process.env.TARGET_PROFILE,
+              profile_family: family,
+              runtime
             },
             relay: {
               repository: process.env.RELAY_REPOSITORY,
@@ -378,18 +783,36 @@ jobs:
             },
             trusted_job_results: {
               posix_matrix: process.env.POSIX_RESULT,
-              windows: process.env.WINDOWS_RESULT
+              windows: process.env.WINDOWS_RESULT,
+              python_matrix: process.env.PYTHON_DISPATCH_RESULT,
+              regression_preparation: process.env.PREPARE_REGRESSION_RESULT,
+              python_regression_matrix: process.env.PYTHON_REGRESSION_RESULT,
+              exact_regression_matrix: regressionMatrix
             },
             source_checkout_verified: allPassed,
             tests_and_assertions_executed: allPassed,
             aggregate: allPassed ? 'success' : 'error',
+            reproducibility: {
+              source_revisions: 'exact-sha',
+              dependency_environment: family === 'python'
+                ? 'networked-profile-defined-non-hermetic'
+                : 'runner-toolchain-profile-defined'
+            },
             generated_at: new Date().toISOString(),
             observations: 'Untrusted artifacts are not inputs to this receipt.'
           };
           fs.writeFileSync(process.env.receipt_file,
             JSON.stringify(receipt, null, 2) + '\n');
           NODE
-          sha256sum "$receipt_file" > "$receipt_file.sha256"
+          relative_receipt="${receipt_file#ledger/}"
+          (
+            cd ledger
+            sha256sum "$relative_receipt"
+          ) > "$receipt_file.sha256"
+          (
+            cd ledger
+            sha256sum -c "$relative_receipt.sha256"
+          )
           printf 'receipt_file=%s\n' "$receipt_file" >> "$GITHUB_OUTPUT"
 
       - name: Upload canonical receipt pair
@@ -428,9 +851,14 @@ jobs:
             echo "- Target: \`$TARGET_REPO\`"
             echo "- Commit: \`$TARGET_SHA\`"
             echo "- Profile: \`$TARGET_PROFILE\`"
+            echo "- Runtime: \`$TARGET_RUNTIME_JSON\`"
+            echo "- Regression matrix: \`${REGRESSION_MATRIX_JSON:-not-applicable}\`"
             echo "- Declared lead provider: \`$LEAD_PROVIDER\`"
             echo "- POSIX matrix: \`$POSIX_RESULT\`"
             echo "- Windows: \`$WINDOWS_RESULT\`"
+            echo "- Python dispatch matrix: \`$PYTHON_DISPATCH_RESULT\`"
+            echo "- Regression preparation: \`$PREPARE_REGRESSION_RESULT\`"
+            echo "- Python regression matrix: \`$PYTHON_REGRESSION_RESULT\`"
             echo "- Run: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\`"
             echo "- Durable ledger: \`receipts\` branch"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -439,5 +867,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$POSIX_RESULT" == success ]]
-          [[ "$WINDOWS_RESULT" == success ]]
+          if [[ "$TARGET_PROFILE_FAMILY" == process-environment ]]; then
+            [[ "$POSIX_RESULT" == success ]]
+            [[ "$WINDOWS_RESULT" == success ]]
+          elif [[ "$TARGET_PROFILE_FAMILY" == python ]]; then
+            [[ "$PYTHON_DISPATCH_RESULT" == success ]]
+          else
+            exit 1
+          fi
+          if [[ "$RELAY_EVENT_NAME" == push ]]; then
+            [[ "$PREPARE_REGRESSION_RESULT" == success ]]
+            [[ "$PYTHON_REGRESSION_RESULT" == success ]]
+          fi

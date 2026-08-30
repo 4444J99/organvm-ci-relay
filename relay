@@ -1,10 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TARGET_REPO="${TARGET_REPO:-organvm/process-environment-enactment}"
-TARGET_SHA="${TARGET_SHA:-ffebb6fa1020098e18020f6a4a845cf933c0df3c}"
-PROFILE="${PROFILE:-process-environment-enactment-v1}"
-LEAD_PROVIDER="${LEAD_PROVIDER:-operator}"
+RELAY_ROOT="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CANARY_TARGET=''
+CANARY_SHA=''
+CANARY_PROFILE=''
+CANARY_LEAD_PROVIDER=''
+while IFS='=' read -r key value; do
+  case "$key" in
+    target) CANARY_TARGET="$value" ;;
+    sha) CANARY_SHA="$value" ;;
+    profile) CANARY_PROFILE="$value" ;;
+    lead_provider) CANARY_LEAD_PROVIDER="$value" ;;
+    *) exit 1 ;;
+  esac
+done < <(node - "$RELAY_ROOT/config/targets.json" <<'NODE'
+const fs = require('fs');
+const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const canary = config.canary;
+if (!canary || Array.isArray(canary) || typeof canary !== 'object' ||
+    JSON.stringify(Object.keys(canary).sort()) !==
+      JSON.stringify(['lead_provider', 'profile', 'sha', 'target']) ||
+    !/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/.test(canary.target) ||
+    !/^[0-9a-f]{40}$/.test(canary.sha) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(canary.profile) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(canary.lead_provider) ||
+    !config.targets?.[canary.target]?.profiles?.includes(canary.profile)) {
+  throw new Error('Invalid relay canary in config/targets.json');
+}
+for (const key of ['target', 'sha', 'profile', 'lead_provider']) {
+  process.stdout.write(`${key}=${canary[key]}\n`);
+}
+NODE
+)
+
+: "${CANARY_TARGET:?config/targets.json did not resolve a canary target}"
+: "${CANARY_SHA:?config/targets.json did not resolve a canary SHA}"
+: "${CANARY_PROFILE:?config/targets.json did not resolve a canary profile}"
+: "${CANARY_LEAD_PROVIDER:?config/targets.json did not resolve canary provenance}"
+
+TARGET_REPO="${TARGET_REPO:-$CANARY_TARGET}"
+TARGET_SHA="${TARGET_SHA:-$CANARY_SHA}"
+PROFILE="${PROFILE:-$CANARY_PROFILE}"
+LEAD_PROVIDER="${LEAD_PROVIDER:-$CANARY_LEAD_PROVIDER}"
 
 [[ "$TARGET_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$ ]]
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
