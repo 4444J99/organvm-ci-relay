@@ -1,5 +1,5 @@
 {
-  "schema": "organvm.relay-targets.v3",
+  "schema": "organvm.relay-targets.v4",
   "policy": {
     "require_public_source": true,
     "require_exact_40_hex_sha": true,
@@ -14,12 +14,60 @@
     },
     "python-ruff-pytest-v1": {
       "family": "python",
-      "description": "Python 3.11/3.12 editable install, pytest, and Ruff"
+      "description": "Python editable install, pytest, and Ruff",
+      "runtime": {
+        "python_versions": [
+          "3.11.16",
+          "3.12.14"
+        ]
+      }
     },
     "organvm-engine-v1": {
       "family": "python",
-      "description": "ORGANVM engine matrix with Ruff, Pyright, and the full pytest suite"
+      "description": "ORGANVM engine matrix with Ruff, Pyright, and the full pytest suite",
+      "runtime": {
+        "python_versions": [
+          "3.11.16",
+          "3.12.14"
+        ]
+      }
+    },
+    "python-pytest-test-v1": {
+      "family": "python",
+      "description": "Exact Python editable test-extra install and pytest suite",
+      "runtime": {
+        "python_versions": [
+          "3.11.16",
+          "3.12.14"
+        ]
+      }
+    },
+    "danse-portable-v1": {
+      "family": "python",
+      "description": "Danse portable Python and Node contract, rights, delivery, and syntax suite",
+      "runtime": {
+        "python_versions": [
+          "3.12.14"
+        ],
+        "node_version": "22.23.2"
+      }
+    },
+    "alchemical-smoke-release-node22-v1": {
+      "family": "python",
+      "description": "Brahma strict Node 22 hybrid smoke test and release-package validation",
+      "runtime": {
+        "python_versions": [
+          "3.11.16"
+        ],
+        "node_version": "22.23.2"
+      }
     }
+  },
+  "canary": {
+    "target": "organvm/process-environment-enactment",
+    "sha": "ffebb6fa1020098e18020f6a4a845cf933c0df3c",
+    "profile": "process-environment-enactment-v1",
+    "lead_provider": "relay-push-canary"
   },
   "targets": {
     "organvm/process-environment-enactment": {
@@ -37,11 +85,7 @@
       ],
       "regression_candidate": {
         "sha": "40026461978855cb63dade9ce4a501328c9b8600",
-        "profile": "python-ruff-pytest-v1",
-        "python_versions": [
-          "3.11",
-          "3.12"
-        ]
+        "profile": "python-ruff-pytest-v1"
       }
     },
     "organvm/organvm-engine": {
@@ -52,12 +96,37 @@
       ],
       "regression_candidate": {
         "sha": "f9aeb3f0bc4a329579dcffa2446d813fa8d84141",
-        "profile": "organvm-engine-v1",
-        "python_versions": [
-          "3.11",
-          "3.12"
-        ]
+        "profile": "organvm-engine-v1"
       }
+    },
+    "organvm/laurea": {
+      "stable_repository_id": "1289397231",
+      "visibility": "public",
+      "profiles": [
+        "python-pytest-test-v1"
+      ],
+      "regression_candidate": {
+        "sha": "faf6c5f67130925518233f5f99a76182b544fb85",
+        "profile": "python-pytest-test-v1"
+      }
+    },
+    "organvm/the-thing-without-a-name": {
+      "stable_repository_id": "1320324017",
+      "visibility": "public",
+      "profiles": [
+        "danse-portable-v1"
+      ],
+      "regression_candidate": {
+        "sha": "a5b0a98f903058c9fbb95f8805d2ba1cd3ef2cf6",
+        "profile": "danse-portable-v1"
+      }
+    },
+    "organvm/alchemical-synthesizer": {
+      "stable_repository_id": "1157553907",
+      "visibility": "public",
+      "profiles": [
+        "alchemical-smoke-release-node22-v1"
+      ]
     }
   }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cc -Wall -Wextra -pedantic -std=c99 \
+cc -Wall -Wextra -Werror -pedantic -std=c99 \
   posix-envp-enactment.c -o posix-envp-enactment
 
 ./posix-envp-enactment seed-edge | tee posix-edge.txt
