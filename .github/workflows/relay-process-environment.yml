@@ -440,7 +440,7 @@ jobs:
   receipt:
     name: Canonical isolated receipt
     if: always() && needs.authorize.result == 'success'
-    needs: [authorize, posix, windows, python_dispatch]
+    needs: [authorize, posix, windows, python_dispatch, prepare_regression, python_regression]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -452,6 +452,9 @@ jobs:
       POSIX_RESULT: ${{ needs.posix.result }}
       WINDOWS_RESULT: ${{ needs.windows.result }}
       PYTHON_DISPATCH_RESULT: ${{ needs.python_dispatch.result }}
+      PREPARE_REGRESSION_RESULT: ${{ needs.prepare_regression.result }}
+      PYTHON_REGRESSION_RESULT: ${{ needs.python_regression.result }}
+      RELAY_EVENT_NAME: ${{ github.event_name }}
       TARGET_REPO: ${{ needs.authorize.outputs.full_name }}
       TARGET_SHA: ${{ needs.authorize.outputs.sha }}
       TARGET_PROFILE: ${{ needs.authorize.outputs.profile }}
@@ -487,10 +490,15 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const family = process.env.TARGET_PROFILE_FAMILY;
+          const isTrustRootPush = process.env.RELAY_EVENT_NAME === 'push';
+          const regressionsPassed = !isTrustRootPush ||
+            (process.env.PREPARE_REGRESSION_RESULT === 'success' &&
+             process.env.PYTHON_REGRESSION_RESULT === 'success');
           let allPassed = false;
           if (family === 'process-environment') {
             allPassed = process.env.POSIX_RESULT === 'success' &&
-              process.env.WINDOWS_RESULT === 'success';
+              process.env.WINDOWS_RESULT === 'success' &&
+              regressionsPassed;
           } else if (family === 'python') {
             allPassed = process.env.PYTHON_DISPATCH_RESULT === 'success';
           } else {
@@ -521,7 +529,9 @@ jobs:
             trusted_job_results: {
               posix_matrix: process.env.POSIX_RESULT,
               windows: process.env.WINDOWS_RESULT,
-              python_matrix: process.env.PYTHON_DISPATCH_RESULT
+              python_matrix: process.env.PYTHON_DISPATCH_RESULT,
+              regression_preparation: process.env.PREPARE_REGRESSION_RESULT,
+              python_regression_matrix: process.env.PYTHON_REGRESSION_RESULT
             },
             source_checkout_verified: allPassed,
             tests_and_assertions_executed: allPassed,
@@ -574,6 +584,9 @@ jobs:
             echo "- Declared lead provider: \`$LEAD_PROVIDER\`"
             echo "- POSIX matrix: \`$POSIX_RESULT\`"
             echo "- Windows: \`$WINDOWS_RESULT\`"
+            echo "- Python dispatch matrix: \`$PYTHON_DISPATCH_RESULT\`"
+            echo "- Regression preparation: \`$PREPARE_REGRESSION_RESULT\`"
+            echo "- Python regression matrix: \`$PYTHON_REGRESSION_RESULT\`"
             echo "- Run: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\`"
             echo "- Durable ledger: \`receipts\` branch"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -589,4 +602,8 @@ jobs:
             [[ "$PYTHON_DISPATCH_RESULT" == success ]]
           else
             exit 1
+          fi
+          if [[ "$RELAY_EVENT_NAME" == push ]]; then
+            [[ "$PREPARE_REGRESSION_RESULT" == success ]]
+            [[ "$PYTHON_REGRESSION_RESULT" == success ]]
           fi
