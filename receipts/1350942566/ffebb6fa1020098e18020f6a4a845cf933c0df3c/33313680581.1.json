@@ -1,0 +1,31 @@
+{
+  "schema": "organvm-ci-relay-receipt/v1",
+  "target": {
+    "stable_repository_id": "1350942566",
+    "repository": "organvm/process-environment-enactment",
+    "sha": "ffebb6fa1020098e18020f6a4a845cf933c0df3c",
+    "profile": "process-environment-enactment-v1"
+  },
+  "relay": {
+    "repository": "4444J99/organvm-ci-relay",
+    "workflow_sha": "72702f0e31cd84757c6afb82d50bdf51277d97c0",
+    "workflow_ref": "4444J99/organvm-ci-relay/.github/workflows/relay-process-environment.yml@refs/heads/main",
+    "event_sha": "72702f0e31cd84757c6afb82d50bdf51277d97c0",
+    "run_id": "33313680581",
+    "run_attempt": "1",
+    "run_url": "https://github.com/4444J99/organvm-ci-relay/actions/runs/33313680581"
+  },
+  "dispatch": {
+    "actor": "4444J99",
+    "declared_lead_provider": "codex"
+  },
+  "trusted_job_results": {
+    "posix_matrix": "success",
+    "windows": "success"
+  },
+  "source_checkout_verified": true,
+  "tests_and_assertions_executed": true,
+  "aggregate": "success",
+  "generated_at": "2026-08-30T13:16:03.094Z",
+  "observations": "Untrusted artifacts are not inputs to this receipt."
+}
