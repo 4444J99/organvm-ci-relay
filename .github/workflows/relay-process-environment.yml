@@ -567,5 +567,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$POSIX_RESULT" == success ]]
-          [[ "$WINDOWS_RESULT" == success ]]
+          if [[ "$TARGET_PROFILE_FAMILY" == process-environment ]]; then
+            [[ "$POSIX_RESULT" == success ]]
+            [[ "$WINDOWS_RESULT" == success ]]
+          elif [[ "$TARGET_PROFILE_FAMILY" == python ]]; then
+            [[ "$PYTHON_DISPATCH_RESULT" == success ]]
+          else
+            exit 1
+          fi
