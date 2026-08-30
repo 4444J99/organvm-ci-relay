@@ -100,6 +100,15 @@ jobs:
           const entry = config.targets?.[repository];
           const implementation = config.profiles?.[profile];
 
+          if (config.schema !== 'organvm.relay-targets.v3' ||
+              config.policy?.require_public_source !== true ||
+              config.policy?.require_exact_40_hex_sha !== true ||
+              config.policy?.deny_floating_refs !== true ||
+              config.policy?.receipt_branch !== 'receipts' ||
+              !Array.isArray(config.policy?.allowed_secrets) ||
+              config.policy.allowed_secrets.length !== 0) {
+            throw new Error('Relay registry policy is not fail-closed');
+          }
           if (!entry || entry.visibility !== 'public') {
             throw new Error(`Target is not an allowlisted public repository: ${repository}`);
           }
@@ -277,6 +286,12 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const config = JSON.parse(fs.readFileSync('config/targets.json', 'utf8'));
+          if (config.schema !== 'organvm.relay-targets.v3' ||
+              config.policy?.receipt_branch !== 'receipts' ||
+              !Array.isArray(config.policy?.allowed_secrets) ||
+              config.policy.allowed_secrets.length !== 0) {
+            throw new Error('Relay regression registry is not fail-closed');
+          }
           const include = [];
           for (const [repository, entry] of Object.entries(config.targets ?? {})) {
             const candidate = entry.regression_candidate;
