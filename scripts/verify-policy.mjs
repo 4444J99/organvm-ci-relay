@@ -723,7 +723,7 @@ for (const [target, entry] of targetRecords) {
       fail(`Unknown profile ${profile} for ${target}`);
     }
   }
-  if (entry.regression_candidate) {
+  if (Object.hasOwn(entry, 'regression_candidate')) {
     const candidate = entry.regression_candidate;
     if (!candidate || Array.isArray(candidate) || typeof candidate !== 'object' ||
         JSON.stringify(Object.keys(candidate).sort()) !==
@@ -742,6 +742,9 @@ for (const [target, entry] of targetRecords) {
     regressionJobCount +=
       config.profiles[candidate.profile].runtime.python_versions.length;
   }
+}
+if (regressionJobCount === 0) {
+  fail('Regression matrix must contain at least one job');
 }
 if (regressionJobCount > MAX_REGRESSION_JOBS) {
   fail(`Regression matrix may contain at most ${MAX_REGRESSION_JOBS} jobs`);
