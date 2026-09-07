@@ -524,6 +524,38 @@ try {
     );
   }, /Receipt job execution guard or dependencies changed/u);
 
+  expectRejected('candidate verification cannot suppress failure', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '      - name: Verify the candidate with the trusted base verifier\n' +
+        '        shell: bash',
+      '      - name: Verify the candidate with the trusted base verifier\n' +
+        '        continue-on-error: true\n' +
+        '        shell: bash',
+    );
+  }, /Candidate-verification step execution guard changed/u);
+
+  expectRejected('durable receipt push step cannot be disabled', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      '      - name: Commit the durable receipt\n        shell: bash',
+      '      - name: Commit the durable receipt\n        if: false\n        shell: bash',
+    );
+  }, /Durable receipt push step execution guard changed/u);
+
+  expectRejected('Python dispatch matrix cannot exclude an authorized runtime', (root) => {
+    replaceInJob(
+      root,
+      'python_dispatch',
+      '        python-version: ${{ fromJSON(needs.authorize.outputs.python_versions) }}',
+      '        python-version: ${{ fromJSON(needs.authorize.outputs.python_versions) }}\n' +
+        '        exclude:\n' +
+        '          - python-version: 3.12.14',
+    );
+  }, /Python dispatch matrix mapping changed/u);
+
   expectRejected('folded run scalar hides a second Git push', (root) => {
     replaceInJob(
       root,

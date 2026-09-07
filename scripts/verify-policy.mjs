@@ -954,6 +954,10 @@ if (ledgerCheckouts.length !== 1 || receiptRefs.length !== 1 ||
 const pushCommands = findGitCommands(workflow).filter((command) =>
   commandHasSubcommand(command, 'push'),
 );
+const directStepValue = (step, key, context) => {
+  const entry = step.directEntries.find((candidate) => candidate.key === key);
+  return entry ? unquoteYamlScalar(entry.value, context) : null;
+};
 const expectedPush = [
   'git', '-C', 'ledger', 'push', 'origin', 'HEAD:receipts',
 ];
@@ -961,16 +965,25 @@ if (pushCommands.length !== 1 ||
     JSON.stringify(pushCommands[0].tokens) !== JSON.stringify(expectedPush)) {
   fail('The receipt push must be the only Git push command');
 }
+const receiptPushSteps = receiptSteps.filter((step) => findGitCommands(step.source)
+  .some((command) => commandHasSubcommand(command, 'push')));
+if (receiptPushSteps.length !== 1 ||
+    directStepValue(receiptPushSteps[0], 'name', 'receipt push name') !==
+      'Commit the durable receipt' ||
+    directStepValue(receiptPushSteps[0], 'shell', 'receipt push shell') !== 'bash' ||
+    directStepValue(receiptPushSteps[0], 'if', 'receipt push condition') !== null ||
+    directStepValue(
+      receiptPushSteps[0],
+      'continue-on-error',
+      'receipt push error policy',
+    ) !== null) {
+  fail('Durable receipt push step execution guard changed');
+}
 
 const normalizedExecutableLines = (source) => normalizeShellContinuations(source)
   .split('\n')
   .map((line) => stripYamlComment(line).trim().replace(/\s+/gu, ' '))
   .filter(Boolean);
-
-const directStepValue = (step, key, context) => {
-  const entry = step.directEntries.find((candidate) => candidate.key === key);
-  return entry ? unquoteYamlScalar(entry.value, context) : null;
-};
 
 const assertExecutionCheckout = (jobId, shell) => {
   const job = relayModel.jobs.get(jobId);
@@ -1144,6 +1157,28 @@ const expectedPolicyRunCommands = [
 if (JSON.stringify(policyRunCommands) !== JSON.stringify(expectedPolicyRunCommands)) {
   fail('Relay policy workflow must run only the verifier and its regressions');
 }
+const policyVerificationSteps = extractSteps(
+  policyModel,
+  policyModel.jobs.get('policy'),
+).filter((step) => directStepValue(
+  step,
+  'run',
+  'policy verification run',
+) === 'node trusted/scripts/verify-policy.mjs --candidate-root "$CANDIDATE_ROOT" --base-root trusted');
+if (policyVerificationSteps.length !== 1 ||
+    directStepValue(policyVerificationSteps[0], 'name', 'policy verification name') !==
+      'Verify the candidate with the trusted base verifier' ||
+    directStepValue(policyVerificationSteps[0], 'shell', 'policy verification shell') !==
+      'bash' ||
+    directStepValue(policyVerificationSteps[0], 'if', 'policy verification condition') !==
+      null ||
+    directStepValue(
+      policyVerificationSteps[0],
+      'continue-on-error',
+      'policy verification error policy',
+    ) !== null) {
+  fail('Candidate-verification step execution guard changed');
+}
 const requiredPolicyLines = [
   'pull_request_target:',
   'types: [opened, reopened, synchronize, ready_for_review, edited]',
@@ -1278,6 +1313,37 @@ if (!isDeepStrictEqual(posixRunnerMatrix, [
   '- os: macos-latest',
 ])) {
   fail('POSIX runner matrix changed');
+}
+const pythonDispatchJob = relayModel.jobs.get('python_dispatch');
+const dispatchStrategy = pythonDispatchJob.jobLevelEntries.find(
+  (entry) => entry.key === 'strategy',
+);
+const dispatchStrategyEntries = nestedMappingEntries(
+  pythonDispatchJob.entries,
+  dispatchStrategy,
+  pythonDispatchJob.end,
+  'python_dispatch strategy',
+);
+const dispatchMatrix = dispatchStrategyEntries.find((entry) => entry.key === 'matrix');
+const dispatchMatrixEntries = nestedMappingEntries(
+  pythonDispatchJob.entries,
+  dispatchMatrix,
+  pythonDispatchJob.end,
+  'python_dispatch matrix',
+);
+if (!dispatchStrategy || dispatchStrategy.value !== '' ||
+    !dispatchMatrix || dispatchMatrix.value !== '' ||
+    !isDeepStrictEqual(
+      dispatchStrategyEntries.map((entry) => entry.key),
+      ['fail-fast', 'max-parallel', 'matrix'],
+    ) ||
+    dispatchMatrixEntries.length !== 1 ||
+    dispatchMatrixEntries[0].key !== 'python-version' ||
+    unquoteYamlScalar(
+      dispatchMatrixEntries[0].value,
+      'python_dispatch matrix axis',
+    ) !== '${{ fromJSON(needs.authorize.outputs.python_versions) }}') {
+  fail('Python dispatch matrix mapping changed');
 }
 
 const actionSignatures = [];

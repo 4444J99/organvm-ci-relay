@@ -62,9 +62,11 @@ never accept a runner label, shell command, secret, artifact path, or arbitrary
 workflow. The registry binds each target to a stable GitHub repository ID and
 to a reviewed profile family. Python matrices are derived only from frozen
 profile metadata: exact CPython `3.11.16` and/or `3.12.14`. Hybrid profiles may
-also request exact Node `22.23.2`; both Python jobs use the pinned
-`actions/setup-node@820762786026740c76f36085b0efc47a31fe5020` action with
-automatic package-manager caching disabled. The non-Python family publishes a
+also request exact Node `22.23.2`; both Python jobs use pinned
+`actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97` for CPython
+and conditionally use
+`actions/setup-node@820762786026740c76f36085b0efc47a31fe5020` with automatic
+package-manager caching disabled. The non-Python family publishes a
 non-executed `3.12.14` fallback solely so GitHub can expand the skipped Python
 matrix safely. Moving major aliases such as `3.12` and `22`, Node 20, and
 target-provided declarative commands are rejected.
