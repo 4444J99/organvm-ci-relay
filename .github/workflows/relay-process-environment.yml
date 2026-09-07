@@ -747,6 +747,23 @@ jobs:
           export receipt_file
           node <<'NODE'
           const fs = require('fs');
+          const relayRepository = process.env.RELAY_REPOSITORY;
+          const definingPath = '.github/workflows/relay-process-environment.yml';
+          const expectedWorkflowRef = `${relayRepository}/${definingPath}@refs/heads/main`;
+          const workflowSha = process.env.RELAY_WORKFLOW_SHA;
+          // This relay has direct jobs, not reusable workflow calls. The defining
+          // identity must therefore equal the caller and the admitted event SHA.
+          // Missing properties evaluate to empty strings on unsupported platforms.
+          if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/.test(relayRepository ?? '') ||
+              !/^[0-9a-f]{40}$/.test(workflowSha ?? '') ||
+              process.env.RELAY_EVENT_SHA !== workflowSha ||
+              process.env.RELAY_WORKFLOW_REF !== expectedWorkflowRef ||
+              process.env.DEFINING_WORKFLOW_REPOSITORY !== relayRepository ||
+              process.env.DEFINING_WORKFLOW_FILE_PATH !== definingPath ||
+              process.env.DEFINING_WORKFLOW_REF !== expectedWorkflowRef ||
+              process.env.DEFINING_WORKFLOW_SHA !== workflowSha) {
+            throw new Error('Receipt workflow identity is missing or inconsistent');
+          }
           const family = process.env.TARGET_PROFILE_FAMILY;
           const isTrustRootPush = process.env.RELAY_EVENT_NAME === 'push';
           const runtime = JSON.parse(process.env.TARGET_RUNTIME_JSON);
@@ -768,7 +785,8 @@ jobs:
             throw new Error(`Unknown profile family: ${family}`);
           }
           const receipt = {
-            schema: 'organvm-ci-relay-receipt/v2',
+            schema: 'organvm-ci-relay-receipt/v3',
+            evidence_origin: 'personal-account-relay-execution',
             target: {
               stable_repository_id: process.env.TARGET_REPOSITORY_ID,
               repository: process.env.TARGET_REPO,
@@ -804,9 +822,18 @@ jobs:
               python_regression_matrix: process.env.PYTHON_REGRESSION_RESULT,
               exact_regression_matrix: regressionMatrix
             },
-            source_checkout_verified: allPassed,
-            tests_and_assertions_executed: allPassed,
+            // A failed aggregate cannot establish whether an earlier checkout or
+            // test step ran. Null means unobserved, not a claim of nonexecution.
+            source_checkout_verified: allPassed ? true : null,
+            tests_and_assertions_executed: allPassed ? true : null,
             aggregate: allPassed ? 'success' : 'error',
+            aggregate_scope: 'target-execution-and-required-regressions',
+            publication: {
+              durable_ledger: 'not-yet-observed',
+              artifact_upload: 'not-yet-observed',
+              observation_time: 'receipt-generation',
+              verification: 'Verify publication steps and the immutable ledger commit externally.'
+            },
             reproducibility: {
               source_revisions: 'exact-sha',
               dependency_environment: family === 'python'

@@ -298,6 +298,10 @@ const shellTokens = (source) => {
   });
 };
 
+// A lexical diagnostic, not a Bash/PowerShell interpreter or an admission gate.
+// Dynamic shell evaluation and word concatenation cannot be authenticated by
+// this heuristic. Admission freezes exact executable bytes, and the complete
+// write-enabled receipt job also has its own reviewed SHA-256 seal below.
 const findGitCommands = (source) => {
   const commands = [];
   const normalized = normalizeShellContinuations(source);
@@ -913,7 +917,7 @@ if (fs.existsSync('receipts')) {
 const receiptJob = relayModel.jobs.get('receipt');
 if (!receiptJob) fail('Missing receipt job');
 const expectedReceiptJobDigest =
-  '8e9cd5836e9ae6b629a883c36c7b6c9c78deab9cae0039fa2a710fa18c645155';
+  '0d725d74cde94e51693568ce8ca6186067a0ae798af236e58b579e6069cd0446';
 const directJobValue = (job, key, context) => {
   const entry = job.jobLevelEntries.find((candidate) => candidate.key === key);
   return entry ? unquoteYamlScalar(entry.value, context) : null;

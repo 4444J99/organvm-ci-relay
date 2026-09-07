@@ -101,6 +101,27 @@ it does not claim byte-for-byte dependency reproducibility. Each receipt records
 the exact selected runtime and, on trust-root pushes, the exact expanded
 regression matrix without credentials or target artifacts.
 
+Receipt schema `organvm-ci-relay-receipt/v3` validates all four defining-workflow
+identity fields before creating a receipt. This workflow has direct jobs, so
+the defining identity must match the caller, the main workflow path, and the
+event SHA. Reusable workflows require a separately reviewed identity contract;
+the caller cannot be used as their defining identity by inference.
+
+The receipt's aggregate covers target execution and required regressions only.
+If the aggregate fails, checkout and test-execution observations are `null`
+(unknown), not `false`: a failed test job may have executed real tests. Receipts
+are generated before artifact upload and ledger push, so publication is recorded
+as `not-yet-observed`. Confirm publication from the completed workflow steps and
+the immutable ledger commit; an uploaded success receipt alone does not prove a
+successful ledger push. No target output, private payload, or credential is used
+to populate these provenance fields.
+
+Shell-command recognition in the verifier is a diagnostic heuristic, not a
+complete Bash or PowerShell parser. Exact executable-tree comparisons and the
+reviewed whole-body seal on the write-enabled receipt job enforce admission.
+Quoted command-name concatenation and Unicode shell edge cases cannot bypass
+those byte-level controls; parser recognition alone is never sufficient proof.
+
 The three Wave A trees contain no Git-sourced package dependencies, so there
 are no dependency repository refs to pin. Any future `git+https` dependency in
 a relay-owned profile must use an immutable 40-character commit pin; raw Git
