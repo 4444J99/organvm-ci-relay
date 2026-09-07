@@ -152,6 +152,42 @@ jobs:
           CANDIDATE_ROOT: ${{ github.event_name == 'pull_request_target' && 'candidate' || 'trusted' }}
         run: node trusted/scripts/verify-policy.mjs --candidate-root "$CANDIDATE_ROOT" --base-root trusted
 
+      - name: Verify every registered operational SHA exists
+        if: github.event_name == 'pull_request_target'
+        shell: bash
+        run: |
+          set -euo pipefail
+          verification_root="$(mktemp -d)"
+          trap 'rm -rf "$verification_root"' EXIT
+          mapfile -t operational_refs < <(node <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('candidate/config/targets.json', 'utf8'));
+          const refs = new Set();
+          for (const [repository, target] of Object.entries(config.targets)) {
+            if (Object.hasOwn(target, 'regression_candidate')) {
+              refs.add(`${repository}\t${target.regression_candidate.sha}`);
+            }
+          }
+          refs.add(`${config.canary.target}\t${config.canary.sha}`);
+          process.stdout.write(`${[...refs].sort().join('\n')}\n`);
+          NODE
+          )
+          [[ "${#operational_refs[@]}" -ge 1 ]]
+          index=0
+          for operational_ref in "${operational_refs[@]}"; do
+            IFS=$'\t' read -r repository revision <<< "$operational_ref"
+            [[ "$repository" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$ ]]
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+            directory="$verification_root/$index"
+            git -C "$verification_root" init --bare "$index"
+            git -C "$directory" remote add origin "https://github.com/${repository}.git"
+            GIT_TERMINAL_PROMPT=0 git -C "$directory" \
+              -c credential.helper= -c protocol.version=2 \
+              fetch --no-tags --filter=blob:none --depth=1 origin "$revision"
+            [[ "$(git -C "$directory" rev-parse FETCH_HEAD)" == "$revision" ]]
+            index=$((index + 1))
+          done
+
       - name: Regress the trusted base verifier
         shell: bash
         run: node trusted/scripts/test-policy.mjs --base-root trusted

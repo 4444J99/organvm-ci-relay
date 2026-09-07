@@ -596,9 +596,31 @@ const profilePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const families = new Set(['process-environment', 'python']);
 const exactPythonVersions = new Set(['3.11.16', '3.12.14']);
 const exactNodeVersions = new Set(['22.23.2']);
+const expectedProfileDigests = new Map([
+  ['profiles/alchemical-smoke-release-node22-v1.sh',
+    'd1c43d899479f6fb049ab9302dc35d33e6774d3a259b63d66d32163e67cbba02'],
+  ['profiles/danse-portable-v1.sh',
+    '204c82bcafced0679dd7b9aadeabe7386d6df12e7bd8f96c3c87a6f3d0e7c138'],
+  ['profiles/organvm-engine-v1.sh',
+    '310f49b96e346a011988a94baf9a7f8eb8f8b7af06dfe8f57834dfef9adcf3d8'],
+  ['profiles/process-environment-enactment-v1.ps1',
+    'ad97061a50309255dccac6ab1c9b7f8f5e49f0efa897565c88f62d48abcafb01'],
+  ['profiles/process-environment-enactment-v1.sh',
+    '1d0ddd2d825ab74b8b28ffbd9bdeec513b21ba76281220601f51e28ae5721fb7'],
+  ['profiles/python-pytest-test-v1.sh',
+    '151a2bde0add3b0b41be39427ea6c10488e2560eee74ac889f30b0d96cfb931c'],
+  ['profiles/python-ruff-pytest-v1.sh',
+    '731689698f7fed68492fb8c6cb9a55187837e39cf8c2e05758b366dcb74f28b4'],
+]);
 if (!config.profiles || Array.isArray(config.profiles) ||
     typeof config.profiles !== 'object') {
   fail('Profile-family map must be an object');
+}
+if (!isDeepStrictEqual(
+  [...expectedProfileDigests.keys()].sort(),
+  collectProfileFiles(candidateRoot),
+)) {
+  fail('Reviewed profile digest allowlist is incomplete');
 }
 for (const [name, profile] of Object.entries(config.profiles ?? {})) {
   if (!profilePattern.test(name)) fail(`Invalid profile: ${name}`);
@@ -668,6 +690,10 @@ for (const [name, profile] of Object.entries(config.profiles ?? {})) {
     );
     if (rawGitNetworkCommand) {
       fail(`Raw Git network command in ${executableProfilePath}`);
+    }
+    const profileDigest = createHash('sha256').update(source).digest('hex');
+    if (profileDigest !== expectedProfileDigests.get(executableProfilePath)) {
+      fail(`Reviewed profile digest changed: ${executableProfilePath}: ${profileDigest}`);
     }
   }
 }
@@ -1182,6 +1208,7 @@ const policyRunCommands = policySteps.flatMap((step) => step.directEntries
 const expectedPolicyRunCommands = [
   '|',
   'node trusted/scripts/verify-policy.mjs --candidate-root "$CANDIDATE_ROOT" --base-root trusted',
+  '|',
   'node trusted/scripts/test-policy.mjs --base-root trusted',
 ];
 if (JSON.stringify(policyRunCommands) !== JSON.stringify(expectedPolicyRunCommands)) {
@@ -1210,7 +1237,7 @@ if (candidateVerificationSteps.length !== 1 ||
 }
 const policyRegressionSteps = policySteps.filter((step) =>
   directStepValue(step, 'run', 'policy regression command') ===
-    expectedPolicyRunCommands[2],
+    expectedPolicyRunCommands[3],
 );
 if (policyRegressionSteps.length !== 1 ||
     directStepValue(policyRegressionSteps[0], 'name', 'policy regression step name') !==
@@ -1225,6 +1252,24 @@ if (policyRegressionSteps.length !== 1 ||
       'policy regression step error policy',
     ) !== null) {
   fail('The trusted policy-regression step must run unconditionally and fail closed');
+}
+const operationalShaSteps = policySteps.filter((step) =>
+  directStepValue(step, 'name', 'operational SHA step name') ===
+    'Verify every registered operational SHA exists',
+);
+const expectedOperationalShaDigest =
+  '82fa84b79bc3f251be2d6acb50892d61a5bda4233d5b9ce54b0b3ba30a5869e9';
+if (operationalShaSteps.length !== 1 ||
+    directStepValue(operationalShaSteps[0], 'if', 'operational SHA condition') !==
+      "github.event_name == 'pull_request_target'" ||
+    directStepValue(operationalShaSteps[0], 'shell', 'operational SHA shell') !== 'bash' ||
+    directStepValue(
+      operationalShaSteps[0],
+      'continue-on-error',
+      'operational SHA error policy',
+    ) !== null ||
+    sourceDigest(operationalShaSteps[0].source) !== expectedOperationalShaDigest) {
+  fail('The operational SHA existence gate changed');
 }
 const requiredPolicyLines = [
   'pull_request_target:',

@@ -241,6 +241,17 @@ try {
     }, /trusted policy-regression step must run unconditionally and fail closed/u);
   }
 
+  expectSelfRejected('operational SHA gate cannot be disabled', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      "      - name: Verify every registered operational SHA exists\n" +
+        "        if: github.event_name == 'pull_request_target'",
+      '      - name: Verify every registered operational SHA exists\n' +
+        '        if: false',
+    );
+  }, /operational SHA existence gate changed/u);
+
   expectRejected('workflow jobs cannot use self-hosted runners', (root) => {
     replaceInJob(
       root,
@@ -642,6 +653,13 @@ try {
     );
   }, /Raw Git network command/u);
 
+  expectSelfRejected('reviewed profile digest rejects escaped Git executable', (root) => {
+    fs.appendFileSync(
+      path.join(root, 'profiles', 'python-ruff-pytest-v1.sh'),
+      '\ng\\it clone https://github.com/example/repo.git\n',
+    );
+  }, /Reviewed profile digest changed/u);
+
   expectRejected('YAML permission anchor', (root) => {
     replace(
       root,
@@ -991,7 +1009,7 @@ try {
       path.join(root, 'profiles', 'python-ruff-pytest-v1.sh'),
       '\n: # candidate-only profile edit\n',
     );
-  }, /Frozen executable trust root changed: profiles\/python-ruff-pytest-v1\.sh/u);
+  }, /(?:Reviewed profile digest changed|Frozen executable trust root changed): profiles\/python-ruff-pytest-v1\.sh/u);
 
   expectRejected('candidate cannot edit the relay launcher', (root) => {
     fs.appendFileSync(path.join(root, 'relay'), '\n# candidate-only launcher edit\n');
@@ -999,7 +1017,7 @@ try {
 
   expectRejected('candidate cannot add a trusted profile', (root) => {
     fs.writeFileSync(path.join(root, 'profiles', 'untrusted.sh'), '#!/usr/bin/env bash\n');
-  }, /Frozen executable trust root changed: profiles/u);
+  }, /Reviewed profile digest allowlist is incomplete|Frozen executable trust root changed: profiles/u);
 
   expectRejected('candidate cannot add trust-root Git attributes', (root) => {
     fs.writeFileSync(path.join(root, '.gitattributes'), 'scripts/** filter=lfs\n');
