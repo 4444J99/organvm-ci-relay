@@ -464,6 +464,16 @@ try {
     );
   }, /receipt push must be the only Git push command/u);
 
+  expectRejected('midword hash cannot hide a second Git push', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      '          git -C ledger push origin HEAD:receipts',
+      '          git -C ledger push origin HEAD:receipts#x && ' +
+        'git -C ledger push origin HEAD:main',
+    );
+  }, /receipt push must be the only Git push command/u);
+
   expectRejected('folded run scalar hides a second Git push', (root) => {
     replaceInJob(
       root,
