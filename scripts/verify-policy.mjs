@@ -566,6 +566,9 @@ const workflowModels = Object.fromEntries(
     buildWorkflowModel(source, file),
   ]),
 );
+if (Object.values(workflows).some((source) => /!!|!<[^>]+>/u.test(source))) {
+  fail('Explicit YAML tags are forbidden in relay workflows');
+}
 const relayModel = workflowModels['relay-process-environment.yml'];
 const policyModel = workflowModels['relay-policy.yml'];
 for (const model of Object.values(workflowModels)) {
@@ -1246,6 +1249,9 @@ if (!policyJobName || unquoteYamlScalar(
   fail('Only pull_request_target may emit the required Relay trust policy context');
 }
 const policyJob = policyModel.jobs.get('policy');
+if (directJobValue(policyJob, 'timeout-minutes', 'relay policy timeout') !== '15') {
+  fail('Relay policy job timeout changed');
+}
 const policySteps = extractSteps(policyModel, policyJob);
 const policyRunCommands = policySteps.flatMap((step) => step.directEntries
   .filter((entry) => entry.key === 'run')
@@ -1303,7 +1309,7 @@ const operationalShaSteps = policySteps.filter((step) =>
     'Verify every registered operational SHA exists',
 );
 const expectedOperationalShaDigest =
-  '943ed2ea09bdd2e80ea99c39d801b82b27fe3103c4c6df79931e01dbb2c972be';
+  '2fdd8b32b9cd9c46263a2b8b178ddf1c112dbd7fbb3fa1c9271010b782f5f50c';
 if (operationalShaSteps.length !== 1 ||
     directStepValue(operationalShaSteps[0], 'if', 'operational SHA condition') !==
       "github.event_name == 'pull_request_target'" ||
@@ -1313,9 +1319,24 @@ if (operationalShaSteps.length !== 1 ||
       'continue-on-error',
       'operational SHA error policy',
     ) !== null ||
-    !/ {14}LIVE_REPOSITORY_JSON="\$live_json" node <<'NODE'\n[\s\S]*?\n {10}NODE\n {12}index=\$\(\(index \+ 1\)\)/u.test(policyWorkflow) ||
     sourceDigest(operationalShaSteps[0].source) !== expectedOperationalShaDigest) {
   fail('The operational SHA existence gate changed');
+}
+const operationalEnvEntry = operationalShaSteps[0].directEntries.find(
+  (entry) => entry.key === 'env',
+);
+const operationalEnv = operationalEnvEntry && operationalEnvEntry.value === ''
+  ? nestedMappingEntries(
+    operationalShaSteps[0].entries,
+    operationalEnvEntry,
+    operationalShaSteps[0].end,
+    'operational SHA environment',
+  )
+  : [];
+if (operationalEnv.length !== 1 || operationalEnv[0].key !== 'GITHUB_TOKEN' ||
+    unquoteYamlScalar(operationalEnv[0].value, 'operational SHA GITHUB_TOKEN') !==
+      '${{ github.token }}') {
+  fail('The operational SHA gate must receive only the read-only workflow token');
 }
 const requiredPolicyLines = [
   'pull_request_target:',
@@ -1326,8 +1347,10 @@ const requiredPolicyLines = [
   'if: github.event_name == \'pull_request_target\'',
   '([repository, target]) => `${repository}\\t${target.stable_repository_id}`',
   '[[ "$stable_repository_id" =~ ^[1-9][0-9]*$ ]]',
+  '--header "Authorization: Bearer $GITHUB_TOKEN" \\',
+  'if (( ${#identity_pids[@]} == 8 )); then',
   '"https://api.github.com/repos/$repository"',
-  'if (String(live.id) !== process.env.STABLE_REPOSITORY_ID ||',
+  'if (String(live.id) !== stableId ||',
   'git -C candidate-repository init --bare',
   'GIT_TERMINAL_PROMPT=0 git -C candidate-repository \\',
   'fetch --no-tags --filter=blob:none --depth=1 origin "$HEAD_SHA"',

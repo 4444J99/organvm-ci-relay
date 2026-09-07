@@ -15,7 +15,7 @@ jobs:
   policy:
     name: ${{ github.event_name == 'pull_request_target' && 'Relay trust policy' || 'Relay trust policy self-check' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Check out the trusted policy source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -155,6 +155,8 @@ jobs:
       - name: Verify every registered operational SHA exists
         if: github.event_name == 'pull_request_target'
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           verification_root="$(mktemp -d)"
@@ -169,30 +171,52 @@ jobs:
           NODE
           )
           [[ "${#registered_repositories[@]}" -ge 1 ]]
+          verify_live_repository() {
+            local index="$1" repository="$2" stable_repository_id="$3"
+            local live_json="$verification_root/$index-live.json"
+            curl --fail-with-body --silent --show-error --location \
+              --connect-timeout 10 --max-time 30 --retry 2 --retry-all-errors \
+              --retry-delay 2 --retry-max-time 80 \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              --header "Authorization: Bearer $GITHUB_TOKEN" \
+              --output "$live_json" \
+              "https://api.github.com/repos/$repository"
+            node -e '
+              const fs = require("fs");
+              const [file, repository, stableId] = process.argv.slice(1);
+              const live = JSON.parse(fs.readFileSync(file, "utf8"));
+              if (String(live.id) !== stableId ||
+                  String(live.full_name).toLowerCase() !== repository.toLowerCase() ||
+                  live.private !== false || live.visibility !== "public") {
+                throw new Error(`Live repository identity mismatch: ${repository}`);
+              }
+            ' "$live_json" "$repository" "$stable_repository_id"
+          }
+          wait_for_identity_batch() {
+            local failed=0
+            for pid in "${identity_pids[@]}"; do
+              wait "$pid" || failed=1
+            done
+            identity_pids=()
+            [[ "$failed" == 0 ]]
+          }
+          identity_pids=()
           index=0
           for registered_repository in "${registered_repositories[@]}"; do
             IFS=$'\t' read -r repository stable_repository_id <<< "$registered_repository"
             [[ "$repository" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$ ]]
             [[ "$stable_repository_id" =~ ^[1-9][0-9]*$ ]]
-            live_json="$verification_root/$index-live.json"
-            curl --fail-with-body --silent --show-error --location \
-              --connect-timeout 10 --max-time 30 --retry 2 --retry-all-errors \
-              --header 'Accept: application/vnd.github+json' \
-              --header 'X-GitHub-Api-Version: 2022-11-28' \
-              --output "$live_json" \
-              "https://api.github.com/repos/$repository"
-            REPOSITORY="$repository" STABLE_REPOSITORY_ID="$stable_repository_id" \
-              LIVE_REPOSITORY_JSON="$live_json" node <<'NODE'
-            const fs = require('fs');
-            const live = JSON.parse(fs.readFileSync(process.env.LIVE_REPOSITORY_JSON, 'utf8'));
-            if (String(live.id) !== process.env.STABLE_REPOSITORY_ID ||
-                String(live.full_name).toLowerCase() !== process.env.REPOSITORY.toLowerCase() ||
-                live.private !== false || live.visibility !== 'public') {
-              throw new Error(`Live repository identity mismatch: ${process.env.REPOSITORY}`);
-            }
-          NODE
+            verify_live_repository "$index" "$repository" "$stable_repository_id" &
+            identity_pids+=("$!")
+            if (( ${#identity_pids[@]} == 8 )); then
+              wait_for_identity_batch
+            fi
             index=$((index + 1))
           done
+          if (( ${#identity_pids[@]} > 0 )); then
+            wait_for_identity_batch
+          fi
           mapfile -t operational_refs < <(node <<'NODE'
           const fs = require('fs');
           const config = JSON.parse(fs.readFileSync('candidate/config/targets.json', 'utf8'));

@@ -129,6 +129,25 @@ const expectSelfRejected = (name, mutate, expectedDiagnostic) => {
   );
 };
 
+const extractLiteralRunBlock = (source, stepName) => {
+  const lines = source.split('\n');
+  const step = lines.findIndex((line) => line === `      - name: ${stepName}`);
+  assert.notEqual(step, -1, `workflow step is missing: ${stepName}`);
+  const run = lines.findIndex((line, index) => index > step && line === '        run: |');
+  assert.notEqual(run, -1, `literal run block is missing: ${stepName}`);
+  const body = [];
+  for (let index = run + 1; index < lines.length; index += 1) {
+    if (lines[index].startsWith('      - name: ')) break;
+    if (lines[index] === '') {
+      body.push('');
+      continue;
+    }
+    assert.ok(lines[index].startsWith('          '), `invalid run indentation: ${stepName}`);
+    body.push(lines[index].slice(10));
+  }
+  return `${body.join('\n')}\n`;
+};
+
 try {
   const baseline = runVerifier(createFixture());
   assert.equal(
@@ -144,9 +163,42 @@ try {
   );
   assert.match(
     readme,
-    /A candidate-head required context remains deferred until/u,
-    'README must not claim pull_request_target publishes a candidate-head check',
+    /Candidate-head attachment is therefore not an activation\s+blocker/u,
+    'README must record the observed candidate-head attachment',
   );
+  assert.match(
+    readme,
+    /duplicate-context\s+resolution is GitHub platform behavior/u,
+    'README must retain the proven duplicate-context warning',
+  );
+  const policySource = fs.readFileSync(
+    path.join(sourceRoot, '.github', 'workflows', 'relay-policy.yml'),
+    'utf8',
+  );
+  const operationalShell = extractLiteralRunBlock(
+    policySource,
+    'Verify every registered operational SHA exists',
+  );
+  const operationalSyntax = spawnSync('bash', ['-n'], {
+    input: operationalShell,
+    encoding: 'utf8',
+  });
+  assert.equal(
+    operationalSyntax.status,
+    0,
+    `operational admission shell is invalid\n${operationalSyntax.stderr}`,
+  );
+  regressionCount += 1;
+  const malformedOperationalShell = operationalShell.replaceAll(
+    "\nNODE\n)",
+    "\n  NODE\n)",
+  );
+  assert.notEqual(malformedOperationalShell, operationalShell);
+  const malformedSyntax = spawnSync('bash', ['-n'], {
+    input: malformedOperationalShell,
+    encoding: 'utf8',
+  });
+  assert.notEqual(malformedSyntax.status, 0, 'misaligned admission heredoc unexpectedly parsed');
 
   for (const attributePath of [
     '.gitattributes',
@@ -224,6 +276,15 @@ try {
     );
   }, /trusted candidate-verification step must run unconditionally and fail closed/u);
 
+  expectSelfRejected('policy timeout covers bounded live admission', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '    timeout-minutes: 15\n',
+      '    timeout-minutes: 5\n',
+    );
+  }, /Relay policy job timeout changed/u);
+
   for (const [label, injected] of [
     ['condition', '        if: false\n'],
     ['failure suppression', '        continue-on-error: true\n'],
@@ -265,17 +326,8 @@ try {
     replace(
       root,
       '.github/workflows/relay-policy.yml',
-      '                String(live.full_name).toLowerCase() !== process.env.REPOSITORY.toLowerCase() ||\n',
+      '                  String(live.full_name).toLowerCase() !== repository.toLowerCase() ||\n',
       '',
-    );
-  }, /operational SHA existence gate changed/u);
-
-  expectSelfRejected('operational SHA gate keeps executable heredoc delimiters aligned', (root) => {
-    replace(
-      root,
-      '.github/workflows/relay-policy.yml',
-      "          NODE\n            index=$((index + 1))\n          done\n          mapfile -t operational_refs",
-      "            NODE\n            index=$((index + 1))\n          done\n          mapfile -t operational_refs",
     );
   }, /operational SHA existence gate changed/u);
 
@@ -287,6 +339,15 @@ try {
       'on:\n  pull_request:\n  push:',
     );
   }, /Relay execution trigger allowlist changed/u);
+
+  expectRejected('execution workflow rejects tagged trigger keys', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-process-environment.yml',
+      'on:\n  push:',
+      'on:\n  !!str pull_request:\n  push:',
+    );
+  }, /Explicit YAML tags are forbidden/u);
 
   expectRejected('workflow jobs cannot use self-hosted runners', (root) => {
     replaceInJob(
