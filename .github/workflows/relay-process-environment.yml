@@ -406,14 +406,14 @@ jobs:
             }
             stableRepositoryIds.add(stableRepositoryId);
             const candidate = entry?.regression_candidate;
-            if (!candidate) continue;
-            const implementation = config.profiles?.[candidate.profile];
+            if (!Object.hasOwn(entry ?? {}, 'regression_candidate')) continue;
             if (!candidate || Array.isArray(candidate) ||
                 typeof candidate !== 'object' ||
                 JSON.stringify(Object.keys(candidate).sort()) !==
                   JSON.stringify(['profile', 'sha'])) {
               throw new Error(`Invalid regression candidate record for ${repository}`);
             }
+            const implementation = config.profiles?.[candidate.profile];
             if (entry.visibility !== 'public') {
               throw new Error(`Invalid regression target identity for ${repository}`);
             }

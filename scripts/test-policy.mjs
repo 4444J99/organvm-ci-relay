@@ -474,6 +474,56 @@ try {
     );
   }, /receipt push must be the only Git push command/u);
 
+  expectRejected('policy candidate-fetch block rejects additive commands', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '          set -euo pipefail\n          [[ "$BASE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]',
+      '          set -euo pipefail\n          echo additive-command\n' +
+        '          [[ "$BASE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]',
+    );
+  }, /Relay policy candidate-fetch trust anchor changed/u);
+
+  expectRejected('self-hosted runner substitution', (root) => {
+    replaceInJob(root, 'windows', '    runs-on: windows-latest', '    runs-on: self-hosted');
+  }, /Workflow job runner changed: relay-process-environment\.yml:windows/u);
+
+  expectRejected('self-hosted POSIX matrix expansion', (root) => {
+    replaceInJob(
+      root,
+      'posix',
+      '          - os: macos-latest',
+      '          - os: macos-latest\n          - os: self-hosted',
+    );
+  }, /POSIX runner matrix changed/u);
+
+  expectRejected('job-level failure suppression', (root) => {
+    replaceInJob(
+      root,
+      'python_regression',
+      '    runs-on: ubuntu-latest',
+      '    runs-on: ubuntu-latest\n    continue-on-error: true',
+    );
+  }, /Workflow jobs may not suppress failure/u);
+
+  expectRejected('receipt job cannot be disabled', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      "    if: always() && needs.authorize.result == 'success'",
+      '    if: false',
+    );
+  }, /Receipt job execution guard or dependencies changed/u);
+
+  expectRejected('receipt dependencies cannot omit regressions', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      '    needs: [authorize, posix, windows, python_dispatch, prepare_regression, python_regression]',
+      '    needs: [authorize, posix, windows, python_dispatch, prepare_regression]',
+    );
+  }, /Receipt job execution guard or dependencies changed/u);
+
   expectRejected('folded run scalar hides a second Git push', (root) => {
     replaceInJob(
       root,

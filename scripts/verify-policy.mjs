@@ -886,6 +886,16 @@ if (fs.existsSync('receipts')) {
 
 const receiptJob = relayModel.jobs.get('receipt');
 if (!receiptJob) fail('Missing receipt job');
+const receiptIf = receiptJob.jobLevelEntries.filter((entry) => entry.key === 'if');
+const receiptNeeds = receiptJob.jobLevelEntries.filter((entry) => entry.key === 'needs');
+if (receiptIf.length !== 1 ||
+    unquoteYamlScalar(receiptIf[0].value, 'receipt job condition') !==
+      "always() && needs.authorize.result == 'success'" ||
+    receiptNeeds.length !== 1 ||
+    unquoteYamlScalar(receiptNeeds[0].value, 'receipt job dependencies') !==
+      '[authorize, posix, windows, python_dispatch, prepare_regression, python_regression]') {
+  fail('Receipt job execution guard or dependencies changed');
+}
 if (!/else if \(family === 'python'\) \{\s*allPassed =\s*process\.env\.PYTHON_DISPATCH_RESULT === 'success' &&\s*regressionsPassed;\s*\}/u
     .test(receiptJob.source)) {
   fail('Python receipt aggregation must include trust-root regressions');
@@ -1032,7 +1042,7 @@ const prepareMatrixSteps = extractSteps(relayModel, prepareRegressionJob).filter
 );
 const sourceDigest = (source) => createHash('sha256').update(source).digest('hex');
 const expectedPrepareMatrixDigest =
-  '92566ff6fd9ca33427c637790135e0001f2ea955668a2f0a35deb9068d698355';
+  'd1c4204a0fc1cb58f554f59311fbd8b9710df95972074d5b3c9bc197954b9719';
 if (prepareMatrixSteps.length !== 1 ||
     sourceDigest(prepareMatrixSteps[0].source) !== expectedPrepareMatrixDigest) {
   fail('prepare_regression registry accounting anchors changed');
@@ -1162,6 +1172,10 @@ const requiredPolicyLines = [
   'contents_auth=()',
   'if [[ "$HEAD_REPOSITORY" == "$BASE_REPOSITORY" ]]; then',
   'contents_auth=(--header "Authorization: Bearer $GITHUB_TOKEN")',
+  '--retry 3 \\',
+  '--retry-all-errors \\',
+  '--retry-delay 2 \\',
+  '--retry-max-time 20 \\',
   "--header 'Accept: application/vnd.github.object+json' \\",
   '"${contents_auth[@]}" \\',
   '"$GITHUB_API_URL/repos/$HEAD_REPOSITORY/contents/config/targets.json?ref=$HEAD_SHA" \\',
@@ -1181,6 +1195,21 @@ for (const line of requiredPolicyLines) {
   if (!policyLines.has(line)) {
     fail(`Missing base-anchored policy command: ${line}`);
   }
+}
+const policyCandidateFetchSteps = extractSteps(
+  policyModel,
+  policyModel.jobs.get('policy'),
+).filter((step) => directStepValue(
+  step,
+  'name',
+  'policy candidate-fetch step',
+) === 'Fetch the exact pull-request head and freeze executable policy');
+const expectedPolicyCandidateFetchDigest =
+  '6461dfdd9db90728f9a618e0c098de61347714080d5fb4ae22698564dca6eafa';
+if (policyCandidateFetchSteps.length !== 1 ||
+    sourceDigest(policyCandidateFetchSteps[0].source) !==
+      expectedPolicyCandidateFetchDigest) {
+  fail('Relay policy candidate-fetch trust anchor changed');
 }
 if (policyLines.has('pull_request:')) {
   fail('Relay policy must not execute candidate-controlled pull_request workflow code');
@@ -1209,6 +1238,46 @@ const expectedRelayJobs = [
 ];
 if (!isDeepStrictEqual([...relayModel.jobs.keys()], expectedRelayJobs)) {
   fail('Relay workflow job allowlist changed');
+}
+
+const expectedJobRunners = new Map([
+  ['relay-policy.yml:policy', 'ubuntu-latest'],
+  ['relay-process-environment.yml:authorize', 'ubuntu-latest'],
+  ['relay-process-environment.yml:posix', '${{ matrix.os }}'],
+  ['relay-process-environment.yml:windows', 'windows-latest'],
+  ['relay-process-environment.yml:prepare_regression', 'ubuntu-latest'],
+  ['relay-process-environment.yml:python_dispatch', 'ubuntu-latest'],
+  ['relay-process-environment.yml:python_regression', 'ubuntu-latest'],
+  ['relay-process-environment.yml:receipt', 'ubuntu-latest'],
+]);
+let observedJobCount = 0;
+for (const [file, model] of Object.entries(workflowModels)) {
+  for (const job of model.jobs.values()) {
+    observedJobCount += 1;
+    const context = `${file}:${job.id}`;
+    const runners = job.jobLevelEntries.filter((entry) => entry.key === 'runs-on');
+    if (runners.length !== 1 ||
+        unquoteYamlScalar(runners[0].value, `${context} runner`) !==
+          expectedJobRunners.get(context)) {
+      fail(`Workflow job runner changed: ${context}`);
+    }
+    if (job.jobLevelEntries.some((entry) => entry.key === 'continue-on-error')) {
+      fail(`Workflow jobs may not suppress failure: ${context}`);
+    }
+  }
+}
+if (observedJobCount !== expectedJobRunners.size) {
+  fail('Workflow job runner allowlist is incomplete');
+}
+const posixRunnerMatrix = relayModel.jobs.get('posix').source
+  .split('\n')
+  .map((line) => line.trim())
+  .filter((line) => line.startsWith('- os:'));
+if (!isDeepStrictEqual(posixRunnerMatrix, [
+  '- os: ubuntu-latest',
+  '- os: macos-latest',
+])) {
+  fail('POSIX runner matrix changed');
 }
 
 const actionSignatures = [];
