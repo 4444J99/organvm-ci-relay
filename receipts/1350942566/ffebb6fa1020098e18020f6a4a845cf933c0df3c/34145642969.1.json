@@ -1,0 +1,109 @@
+{
+  "schema": "organvm-ci-relay-receipt/v2",
+  "target": {
+    "stable_repository_id": "1350942566",
+    "repository": "organvm/process-environment-enactment",
+    "sha": "ffebb6fa1020098e18020f6a4a845cf933c0df3c",
+    "profile": "process-environment-enactment-v1",
+    "profile_family": "process-environment",
+    "runtime": {
+      "python_versions": [],
+      "node_version": null
+    }
+  },
+  "relay": {
+    "repository": "4444J99/organvm-ci-relay",
+    "workflow_sha": "5d369f67cc45608c8c8cc26c9793c1d748805b18",
+    "workflow_ref": "4444J99/organvm-ci-relay/.github/workflows/relay-process-environment.yml@refs/heads/main",
+    "event_sha": "5d369f67cc45608c8c8cc26c9793c1d748805b18",
+    "defining_workflow": {
+      "repository": "4444J99/organvm-ci-relay",
+      "file_path": ".github/workflows/relay-process-environment.yml",
+      "ref": "4444J99/organvm-ci-relay/.github/workflows/relay-process-environment.yml@refs/heads/main",
+      "sha": "5d369f67cc45608c8c8cc26c9793c1d748805b18"
+    },
+    "run_id": "34145642969",
+    "run_attempt": "1",
+    "run_url": "https://github.com/4444J99/organvm-ci-relay/actions/runs/34145642969"
+  },
+  "dispatch": {
+    "actor": "4444J99",
+    "declared_lead_provider": "relay-push-canary"
+  },
+  "trusted_job_results": {
+    "posix_matrix": "success",
+    "windows": "success",
+    "python_matrix": "skipped",
+    "regression_preparation": "success",
+    "python_regression_matrix": "success",
+    "exact_regression_matrix": {
+      "include": [
+        {
+          "repository": "organvm/learning-resources",
+          "stable_repository_id": "1155240211",
+          "sha": "40026461978855cb63dade9ce4a501328c9b8600",
+          "profile": "python-ruff-pytest-v1",
+          "python_version": "3.11.16",
+          "node_version": ""
+        },
+        {
+          "repository": "organvm/learning-resources",
+          "stable_repository_id": "1155240211",
+          "sha": "40026461978855cb63dade9ce4a501328c9b8600",
+          "profile": "python-ruff-pytest-v1",
+          "python_version": "3.12.14",
+          "node_version": ""
+        },
+        {
+          "repository": "organvm/organvm-engine",
+          "stable_repository_id": "1160447354",
+          "sha": "f9aeb3f0bc4a329579dcffa2446d813fa8d84141",
+          "profile": "organvm-engine-v1",
+          "python_version": "3.11.16",
+          "node_version": ""
+        },
+        {
+          "repository": "organvm/organvm-engine",
+          "stable_repository_id": "1160447354",
+          "sha": "f9aeb3f0bc4a329579dcffa2446d813fa8d84141",
+          "profile": "organvm-engine-v1",
+          "python_version": "3.12.14",
+          "node_version": ""
+        },
+        {
+          "repository": "organvm/laurea",
+          "stable_repository_id": "1289397231",
+          "sha": "faf6c5f67130925518233f5f99a76182b544fb85",
+          "profile": "python-pytest-test-v1",
+          "python_version": "3.11.16",
+          "node_version": ""
+        },
+        {
+          "repository": "organvm/laurea",
+          "stable_repository_id": "1289397231",
+          "sha": "faf6c5f67130925518233f5f99a76182b544fb85",
+          "profile": "python-pytest-test-v1",
+          "python_version": "3.12.14",
+          "node_version": ""
+        },
+        {
+          "repository": "organvm/the-thing-without-a-name",
+          "stable_repository_id": "1320324017",
+          "sha": "a5b0a98f903058c9fbb95f8805d2ba1cd3ef2cf6",
+          "profile": "danse-portable-v1",
+          "python_version": "3.12.14",
+          "node_version": "22.23.2"
+        }
+      ]
+    }
+  },
+  "source_checkout_verified": true,
+  "tests_and_assertions_executed": true,
+  "aggregate": "success",
+  "reproducibility": {
+    "source_revisions": "exact-sha",
+    "dependency_environment": "runner-toolchain-profile-defined"
+  },
+  "generated_at": "2026-09-07T17:05:11.264Z",
+  "observations": "Untrusted artifacts are not inputs to this receipt."
+}
