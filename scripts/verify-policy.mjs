@@ -1153,6 +1153,51 @@ for (const line of requiredExecutableLines) {
   }
 }
 const relayWorkflowLines = workflow.split('\n');
+const relayOnEntries = relayModel.entries.filter(
+  (entry) => entry.indent === 0 && !entry.listItem && entry.key === 'on',
+);
+if (relayOnEntries.length !== 1 || relayOnEntries[0].value !== '') {
+  fail('Relay execution triggers must use one reviewed block mapping');
+}
+const relayTriggerEntries = nestedMappingEntries(
+  relayModel.entries,
+  relayOnEntries[0],
+  relayModel.lines.length,
+  'relay execution triggers',
+);
+if (!isDeepStrictEqual(
+  relayTriggerEntries.map((entry) => entry.key),
+  ['push', 'workflow_dispatch'],
+)) {
+  fail('Relay execution trigger allowlist changed');
+}
+const expectedRelayTriggerMappings = new Map([
+  ['push', new Map([
+    ['branches', '[main]'],
+    ['paths', ''],
+  ])],
+  ['workflow_dispatch', new Map([
+    ['inputs', ''],
+  ])],
+]);
+for (const trigger of relayTriggerEntries) {
+  if (trigger.value !== '') fail(`Relay execution trigger must use a mapping: ${trigger.key}`);
+  const children = nestedMappingEntries(
+    relayModel.entries,
+    trigger,
+    relayModel.lines.length,
+    `relay execution trigger ${trigger.key}`,
+  );
+  const actual = new Map(children.map((entry) => [
+    entry.key,
+    unquoteYamlScalar(entry.value, `relay execution trigger ${trigger.key} ${entry.key}`),
+  ]));
+  const expected = expectedRelayTriggerMappings.get(trigger.key);
+  if (!expected || actual.size !== expected.size ||
+      [...expected].some(([key, value]) => actual.get(key) !== value)) {
+    fail(`Relay execution trigger mapping changed: ${trigger.key}`);
+  }
+}
 const pushPathsStart = relayWorkflowLines.findIndex((line) => line === '    paths:');
 const workflowDispatchStart = relayWorkflowLines.findIndex(
   (line) => line === '  workflow_dispatch:',
@@ -1258,7 +1303,7 @@ const operationalShaSteps = policySteps.filter((step) =>
     'Verify every registered operational SHA exists',
 );
 const expectedOperationalShaDigest =
-  '82fa84b79bc3f251be2d6acb50892d61a5bda4233d5b9ce54b0b3ba30a5869e9';
+  '318664d54da19f67baa8c40a08f49cb995029f99929cf500162e02af8f07e791';
 if (operationalShaSteps.length !== 1 ||
     directStepValue(operationalShaSteps[0], 'if', 'operational SHA condition') !==
       "github.event_name == 'pull_request_target'" ||
@@ -1278,10 +1323,15 @@ const requiredPolicyLines = [
   'workflow_dispatch:',
   "ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}",
   'if: github.event_name == \'pull_request_target\'',
+  '([repository, target]) => `${repository}\\t${target.stable_repository_id}`',
+  '[[ "$stable_repository_id" =~ ^[1-9][0-9]*$ ]]',
+  '"https://api.github.com/repos/$repository"',
+  'if (String(live.id) !== process.env.STABLE_REPOSITORY_ID ||',
   'git -C candidate-repository init --bare',
   'GIT_TERMINAL_PROMPT=0 git -C candidate-repository \\',
   'fetch --no-tags --filter=blob:none --depth=1 origin "$HEAD_SHA"',
   '[[ "$(git -C candidate-repository rev-parse FETCH_HEAD)" == "$HEAD_SHA" ]]',
+  '[[ "$(git -C "$directory" cat-file -t FETCH_HEAD)" == commit ]]',
   '.github/workflows',
   '.github/workflows/relay-policy.yml',
   '.github/workflows/relay-process-environment.yml',
