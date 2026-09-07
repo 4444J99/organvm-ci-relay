@@ -69,7 +69,8 @@ const stripYamlComment = (line) => {
       doubleQuoted = true;
     } else if (character === "'") {
       singleQuoted = true;
-    } else if (character === '#') {
+    } else if (character === '#' &&
+        (index === 0 || /\s/u.test(line[index - 1]))) {
       return line.slice(0, index);
     }
   }
