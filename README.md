@@ -152,17 +152,12 @@ status-signing root. Cross-repository status publication remains deferred.
 
 ## Required-check limitation and bootstrap contract
 
-Do not configure `Relay trust policy` as a candidate-head required context
-yet. GitHub attaches a `pull_request_target` workflow's check suite to the base
-event SHA, even though this workflow securely fetches and verifies the exact
-candidate `HEAD_SHA`. This repository intentionally grants the policy workflow
-only `contents: read`, so it cannot publish a separate check or commit status
-on the candidate head. A candidate-head required context remains deferred until
-a workflow-identity-bound ruleset control or dedicated GitHub App can publish
-it without weakening the zero-secrets and least-privilege boundary. Push and
-manual diagnostics use the separate `Relay trust policy self-check` context.
-Merge queue is not supported until this design has a separately anchored
-`merge_group` implementation.
+Live benign canary PR #7 verified that the base-controlled
+`pull_request_target` workflow publishes `Relay trust policy` on the exact
+candidate head SHA. Candidate-head attachment is therefore not an activation
+blocker. Push and manual diagnostics use the separate
+`Relay trust policy self-check` context. Merge queue remains unsupported until
+this design has a separately anchored `merge_group` implementation.
 
 GitHub's status-check identity is an app plus a context string, not a workflow
 file identity. A branch with workflow-write access can deliberately create a
