@@ -298,6 +298,10 @@ const shellTokens = (source) => {
   });
 };
 
+// A lexical diagnostic, not a Bash/PowerShell interpreter or an admission gate.
+// Dynamic shell evaluation and word concatenation cannot be authenticated by
+// this heuristic. Admission freezes exact executable bytes, and the complete
+// write-enabled receipt job also has its own reviewed SHA-256 seal below.
 const findGitCommands = (source) => {
   const commands = [];
   const normalized = normalizeShellContinuations(source);
@@ -920,7 +924,7 @@ if (fs.existsSync('receipts')) {
 const receiptJob = relayModel.jobs.get('receipt');
 if (!receiptJob) fail('Missing receipt job');
 const expectedReceiptJobDigest =
-  '8e9cd5836e9ae6b629a883c36c7b6c9c78deab9cae0039fa2a710fa18c645155';
+  '30fe6e69ba52b4fae33c4711d4f7ecf030d289ba2aaa0c3a86af05bf31dc0233';
 const directJobValue = (job, key, context) => {
   const entry = job.jobLevelEntries.find((candidate) => candidate.key === key);
   return entry ? unquoteYamlScalar(entry.value, context) : null;
@@ -1102,10 +1106,10 @@ const regressionIdentitySteps = extractSteps(relayModel, pythonRegressionJob).fi
     step,
     'name',
     'python_regression live identity step',
-  ) === 'Re-authorize live identity and fetch both exact revisions anonymously',
+  ) === 'Re-authorize live identity and fetch both exact revisions',
 );
 const expectedRegressionIdentityDigest =
-  '921e3e0648b68cae614a65a3bb481f5c7dd2e0017fdf37bf2a798b3de348bff6';
+  'a9f082ed81e424bf96ff833b642d9095ec87d77e309fb874a79ac298536c4475';
 if (regressionIdentitySteps.length !== 1 ||
     sourceDigest(regressionIdentitySteps[0].source) !==
       expectedRegressionIdentityDigest) {
@@ -1137,16 +1141,16 @@ const requiredExecutableLines = [
   "node_version: runtime.node_version ?? ''",
   'TARGET_RUNTIME_JSON: ${{ needs.authorize.outputs.runtime_json }}',
   'REGRESSION_MATRIX_JSON: ${{ needs.prepare_regression.outputs.matrix }}',
-  'DEFINING_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}',
-  'DEFINING_WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}',
-  'DEFINING_WORKFLOW_REF: ${{ job.workflow_ref }}',
-  'DEFINING_WORKFLOW_SHA: ${{ job.workflow_sha }}',
+  'RELAY_REPOSITORY: ${{ github.repository }}',
+  'RELAY_EVENT_SHA: ${{ github.sha }}',
+  'RELAY_WORKFLOW_REF: ${{ github.workflow_ref }}',
+  'RELAY_WORKFLOW_SHA: ${{ github.workflow_sha }}',
   'runtime',
   'exact_regression_matrix: regressionMatrix',
-  'repository: process.env.DEFINING_WORKFLOW_REPOSITORY,',
-  'file_path: process.env.DEFINING_WORKFLOW_FILE_PATH,',
-  'ref: process.env.DEFINING_WORKFLOW_REF,',
-  'sha: process.env.DEFINING_WORKFLOW_SHA',
+  'repository: relayRepository,',
+  'file_path: definingPath,',
+  'ref: process.env.RELAY_WORKFLOW_REF,',
+  'sha: workflowSha',
   'relative_receipt="${receipt_file#ledger/}"',
   'sha256sum "$relative_receipt"',
   'sha256sum -c "$relative_receipt.sha256"',
