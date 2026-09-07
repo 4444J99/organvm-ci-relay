@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if { ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; } &&
+    command -v apt-get >/dev/null && command -v sudo >/dev/null; then
+  sudo apt-get update
+  sudo apt-get install --yes --no-install-recommends ffmpeg
+fi
+
 for required in python node git ffmpeg ffprobe; do
   command -v "$required" >/dev/null || {
     echo "missing required tool: $required" >&2
