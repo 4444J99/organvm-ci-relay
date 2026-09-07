@@ -190,7 +190,7 @@ jobs:
                 live.private !== false || live.visibility !== 'public') {
               throw new Error(`Live repository identity mismatch: ${process.env.REPOSITORY}`);
             }
-            NODE
+          NODE
             index=$((index + 1))
           done
           mapfile -t operational_refs < <(node <<'NODE'

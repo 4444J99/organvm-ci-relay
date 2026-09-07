@@ -270,6 +270,15 @@ try {
     );
   }, /operational SHA existence gate changed/u);
 
+  expectSelfRejected('operational SHA gate keeps executable heredoc delimiters aligned', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      "          NODE\n            index=$((index + 1))\n          done\n          mapfile -t operational_refs",
+      "            NODE\n            index=$((index + 1))\n          done\n          mapfile -t operational_refs",
+    );
+  }, /operational SHA existence gate changed/u);
+
   expectRejected('execution workflow rejects added triggers', (root) => {
     replace(
       root,
