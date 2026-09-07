@@ -561,8 +561,10 @@ jobs:
           check-latest: false
           package-manager-cache: false
 
-      - name: Re-authorize live identity and fetch both exact revisions anonymously
+      - name: Re-authorize live identity and fetch both exact revisions
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           for spec in \
@@ -605,10 +607,11 @@ jobs:
               --dump-header "$response_headers" \
               --write-out '%{http_code}' \
               --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GITHUB_TOKEN" \
               --header 'X-GitHub-Api-Version: 2022-11-28' \
               "https://api.github.com/repos/$TARGET_REPO")"
             then
-              echo '::error::Unauthenticated GitHub identity request failed at the transport layer' >&2
+              echo '::error::Authenticated GitHub identity request failed at the transport layer' >&2
               exit 1
             fi
 

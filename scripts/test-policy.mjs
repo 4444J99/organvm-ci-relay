@@ -1198,6 +1198,15 @@ try {
     );
   }, /python_regression canonical live repository identity anchor changed/u);
 
+  expectRejected('Python regression live identity remains authenticated', (root) => {
+    replaceInJob(
+      root,
+      'python_regression',
+      '              --header "Authorization: Bearer $GITHUB_TOKEN" \\\n',
+      '',
+    );
+  }, /python_regression canonical live repository identity anchor changed/u);
+
   expectRejected('Python regression cannot overwrite live canonical identity', (root) => {
     replaceInJob(
       root,

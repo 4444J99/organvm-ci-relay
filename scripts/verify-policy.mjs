@@ -1106,10 +1106,10 @@ const regressionIdentitySteps = extractSteps(relayModel, pythonRegressionJob).fi
     step,
     'name',
     'python_regression live identity step',
-  ) === 'Re-authorize live identity and fetch both exact revisions anonymously',
+  ) === 'Re-authorize live identity and fetch both exact revisions',
 );
 const expectedRegressionIdentityDigest =
-  '921e3e0648b68cae614a65a3bb481f5c7dd2e0017fdf37bf2a798b3de348bff6';
+  'a9f082ed81e424bf96ff833b642d9095ec87d77e309fb874a79ac298536c4475';
 if (regressionIdentitySteps.length !== 1 ||
     sourceDigest(regressionIdentitySteps[0].source) !==
       expectedRegressionIdentityDigest) {
