@@ -924,7 +924,7 @@ if (fs.existsSync('receipts')) {
 const receiptJob = relayModel.jobs.get('receipt');
 if (!receiptJob) fail('Missing receipt job');
 const expectedReceiptJobDigest =
-  '0d725d74cde94e51693568ce8ca6186067a0ae798af236e58b579e6069cd0446';
+  '30fe6e69ba52b4fae33c4711d4f7ecf030d289ba2aaa0c3a86af05bf31dc0233';
 const directJobValue = (job, key, context) => {
   const entry = job.jobLevelEntries.find((candidate) => candidate.key === key);
   return entry ? unquoteYamlScalar(entry.value, context) : null;
@@ -1141,16 +1141,16 @@ const requiredExecutableLines = [
   "node_version: runtime.node_version ?? ''",
   'TARGET_RUNTIME_JSON: ${{ needs.authorize.outputs.runtime_json }}',
   'REGRESSION_MATRIX_JSON: ${{ needs.prepare_regression.outputs.matrix }}',
-  'DEFINING_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}',
-  'DEFINING_WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}',
-  'DEFINING_WORKFLOW_REF: ${{ job.workflow_ref }}',
-  'DEFINING_WORKFLOW_SHA: ${{ job.workflow_sha }}',
+  'RELAY_REPOSITORY: ${{ github.repository }}',
+  'RELAY_EVENT_SHA: ${{ github.sha }}',
+  'RELAY_WORKFLOW_REF: ${{ github.workflow_ref }}',
+  'RELAY_WORKFLOW_SHA: ${{ github.workflow_sha }}',
   'runtime',
   'exact_regression_matrix: regressionMatrix',
-  'repository: process.env.DEFINING_WORKFLOW_REPOSITORY,',
-  'file_path: process.env.DEFINING_WORKFLOW_FILE_PATH,',
-  'ref: process.env.DEFINING_WORKFLOW_REF,',
-  'sha: process.env.DEFINING_WORKFLOW_SHA',
+  'repository: relayRepository,',
+  'file_path: definingPath,',
+  'ref: process.env.RELAY_WORKFLOW_REF,',
+  'sha: workflowSha',
   'relative_receipt="${receipt_file#ledger/}"',
   'sha256sum "$relative_receipt"',
   'sha256sum -c "$relative_receipt.sha256"',

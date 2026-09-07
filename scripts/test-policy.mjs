@@ -21,8 +21,8 @@ let regressionCount = 0;
 let acceptanceCount = 0;
 let receiptRuntimeCount = 0;
 
-// Execute the actual inline builder with synthetic environment values and an
-// in-memory filesystem. No GitHub calls, writes, or target code are permitted.
+// Execute the trusted inline builder with synthetic environment values and a
+// narrow mocked fs surface. This is behavioral testing, not a security sandbox.
 const receiptWorkflow = fs.readFileSync(
   path.join(sourceRoot, '.github/workflows/relay-process-environment.yml'),
   'utf8',
@@ -31,6 +31,11 @@ const receiptMarker = '        name: Build canonical receipt from trusted job re
 const receiptStepStart = receiptWorkflow.indexOf(receiptMarker);
 assert(receiptStepStart >= 0, 'canonical receipt step must exist');
 assert.equal(receiptWorkflow.indexOf(receiptMarker, receiptStepStart + 1), -1);
+assert.doesNotMatch(
+  receiptWorkflow,
+  /\$\{\{\s*job\.workflow_/u,
+  'receipt provenance must use supported GitHub Actions context properties',
+);
 const receiptScriptStart = receiptWorkflow.indexOf(
   "          const fs = require('fs');", receiptStepStart,
 );
@@ -57,10 +62,6 @@ const syntheticReceiptEnvironment = {
   RELAY_WORKFLOW_REF: syntheticWorkflowRef,
   RELAY_WORKFLOW_SHA: 'b'.repeat(40),
   RELAY_EVENT_SHA: 'b'.repeat(40),
-  DEFINING_WORKFLOW_REPOSITORY: 'synthetic/relay',
-  DEFINING_WORKFLOW_FILE_PATH: '.github/workflows/relay-process-environment.yml',
-  DEFINING_WORKFLOW_REF: syntheticWorkflowRef,
-  DEFINING_WORKFLOW_SHA: 'b'.repeat(40),
   RUN_ID: '123',
   RUN_ATTEMPT: '1',
   RELAY_ACTOR: 'synthetic-human',
@@ -241,8 +242,6 @@ try {
   assert.equal(validReceipt.publication.artifact_upload, 'not-yet-observed');
   for (const field of [
     'RELAY_REPOSITORY', 'RELAY_WORKFLOW_REF', 'RELAY_WORKFLOW_SHA', 'RELAY_EVENT_SHA',
-    'DEFINING_WORKFLOW_REPOSITORY', 'DEFINING_WORKFLOW_FILE_PATH',
-    'DEFINING_WORKFLOW_REF', 'DEFINING_WORKFLOW_SHA',
   ]) {
     for (const value of ['', undefined, 'mismatched-identity']) {
       exerciseReceipt({ [field]: value }, /Receipt workflow identity is missing or inconsistent/u);
@@ -250,17 +249,12 @@ try {
   }
   exerciseReceipt({
     RELAY_WORKFLOW_REF: syntheticWorkflowRef.replace('main', 'unreviewed'),
-    DEFINING_WORKFLOW_REF: syntheticWorkflowRef.replace('main', 'unreviewed'),
   }, /Receipt workflow identity is missing or inconsistent/u);
   exerciseReceipt({
     RELAY_WORKFLOW_SHA: 'B'.repeat(40), RELAY_EVENT_SHA: 'B'.repeat(40),
-    DEFINING_WORKFLOW_SHA: 'B'.repeat(40),
   }, /Receipt workflow identity is missing or inconsistent/u);
   for (const overrides of [
-    { DEFINING_WORKFLOW_SHA: 'c'.repeat(40) },
     { RELAY_EVENT_SHA: 'c'.repeat(40) },
-    { DEFINING_WORKFLOW_REPOSITORY: 'synthetic/different-relay' },
-    { DEFINING_WORKFLOW_FILE_PATH: '.github/workflows/different.yml' },
   ]) {
     exerciseReceipt(overrides, /Receipt workflow identity is missing or inconsistent/u);
   }
@@ -1082,14 +1076,14 @@ try {
     );
   }, /Missing trust-boundary command: exact_regression_matrix|receipt.*regression|regression.*receipt/iu);
 
-  expectRejected('receipt drops defining workflow SHA', (root) => {
+  expectRejected('receipt drops workflow SHA context', (root) => {
     replaceInJob(
       root,
       'receipt',
-      '          DEFINING_WORKFLOW_SHA: ${{ job.workflow_sha }}',
-      '          DEFINING_WORKFLOW_SHA: omitted',
+      '          RELAY_WORKFLOW_SHA: ${{ github.workflow_sha }}',
+      '          RELAY_WORKFLOW_SHA: omitted',
     );
-  }, /Missing trust-boundary command: DEFINING_WORKFLOW_SHA/u);
+  }, /Missing trust-boundary command: RELAY_WORKFLOW_SHA/u);
 
   expectRejected('Python dispatch matrix cannot become static', (root) => {
     replaceInJob(

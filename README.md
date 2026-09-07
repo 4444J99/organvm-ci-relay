@@ -101,11 +101,13 @@ it does not claim byte-for-byte dependency reproducibility. Each receipt records
 the exact selected runtime and, on trust-root pushes, the exact expanded
 regression matrix without credentials or target artifacts.
 
-Receipt schema `organvm-ci-relay-receipt/v3` validates all four defining-workflow
-identity fields before creating a receipt. This workflow has direct jobs, so
-the defining identity must match the caller, the main workflow path, and the
-event SHA. Reusable workflows require a separately reviewed identity contract;
-the caller cannot be used as their defining identity by inference.
+Receipt schema `organvm-ci-relay-receipt/v3` derives defining-workflow identity
+only from supported `github.repository`, `github.workflow_ref`,
+`github.workflow_sha`, and `github.sha` context fields, and validates them before
+creating a receipt. This workflow has direct jobs, so the defining identity must
+match the main workflow path and event SHA. Reusable workflows require a
+separately reviewed identity contract; the caller cannot be used as their
+defining identity by inference.
 
 The receipt's aggregate covers target execution and required regressions only.
 If the aggregate fails, checkout and test-execution observations are `null`

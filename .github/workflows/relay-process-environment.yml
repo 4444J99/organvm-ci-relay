@@ -735,10 +735,6 @@ jobs:
           RELAY_EVENT_SHA: ${{ github.sha }}
           RELAY_WORKFLOW_REF: ${{ github.workflow_ref }}
           RELAY_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          DEFINING_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          DEFINING_WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
-          DEFINING_WORKFLOW_REF: ${{ job.workflow_ref }}
-          DEFINING_WORKFLOW_SHA: ${{ job.workflow_sha }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RELAY_ACTOR: ${{ github.actor }}
@@ -754,17 +750,13 @@ jobs:
           const definingPath = '.github/workflows/relay-process-environment.yml';
           const expectedWorkflowRef = `${relayRepository}/${definingPath}@refs/heads/main`;
           const workflowSha = process.env.RELAY_WORKFLOW_SHA;
-          // This relay has direct jobs, not reusable workflow calls. The defining
-          // identity must therefore equal the caller and the admitted event SHA.
-          // Missing properties evaluate to empty strings on unsupported platforms.
+          // This relay has direct jobs, not reusable workflow calls. Its defining
+          // identity is derived from supported github context fields and must equal
+          // the reviewed main workflow at the admitted event SHA.
           if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/.test(relayRepository ?? '') ||
               !/^[0-9a-f]{40}$/.test(workflowSha ?? '') ||
               process.env.RELAY_EVENT_SHA !== workflowSha ||
-              process.env.RELAY_WORKFLOW_REF !== expectedWorkflowRef ||
-              process.env.DEFINING_WORKFLOW_REPOSITORY !== relayRepository ||
-              process.env.DEFINING_WORKFLOW_FILE_PATH !== definingPath ||
-              process.env.DEFINING_WORKFLOW_REF !== expectedWorkflowRef ||
-              process.env.DEFINING_WORKFLOW_SHA !== workflowSha) {
+              process.env.RELAY_WORKFLOW_REF !== expectedWorkflowRef) {
             throw new Error('Receipt workflow identity is missing or inconsistent');
           }
           const family = process.env.TARGET_PROFILE_FAMILY;
@@ -804,10 +796,10 @@ jobs:
               workflow_ref: process.env.RELAY_WORKFLOW_REF,
               event_sha: process.env.RELAY_EVENT_SHA,
               defining_workflow: {
-                repository: process.env.DEFINING_WORKFLOW_REPOSITORY,
-                file_path: process.env.DEFINING_WORKFLOW_FILE_PATH,
-                ref: process.env.DEFINING_WORKFLOW_REF,
-                sha: process.env.DEFINING_WORKFLOW_SHA
+                repository: relayRepository,
+                file_path: definingPath,
+                ref: process.env.RELAY_WORKFLOW_REF,
+                sha: workflowSha
               },
               run_id: process.env.RUN_ID,
               run_attempt: process.env.RUN_ATTEMPT,
