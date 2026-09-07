@@ -570,11 +570,66 @@ const workflowModels = Object.fromEntries(
     buildWorkflowModel(source, file),
   ]),
 );
-const taggedMappingKey =
-  /^[ \t]*!(?:[A-Za-z0-9_.-]+)?[ \t]+(?:[A-Za-z_][A-Za-z0-9_-]*|"[^"]+"|'[^']+')[ \t]*:/mu;
-if (Object.values(workflows).some(
-  (source) => /!!|!<[^>]+>/u.test(source) || taggedMappingKey.test(source),
-)) {
+const yamlStructureLine = (line) => {
+  let quote = null;
+  let escaped = false;
+  let result = '';
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (quote === '"') {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quote = null;
+      result += ' ';
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'" && line[index + 1] === "'") {
+        result += '  ';
+        index += 1;
+      } else {
+        if (character === "'") quote = null;
+        result += ' ';
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      result += ' ';
+      continue;
+    }
+    if (character === '#' && (index === 0 || /\s/u.test(line[index - 1]))) break;
+    result += character;
+  }
+  return result;
+};
+const hasExplicitYamlTag = (source) => {
+  let blockScalarIndent = null;
+  for (const line of source.split('\n')) {
+    const indentation = line.match(/^[ ]*/u)[0].length;
+    if (blockScalarIndent !== null) {
+      if (line.trim() === '') continue;
+      if (indentation > blockScalarIndent) continue;
+      blockScalarIndent = null;
+    }
+    const structure = yamlStructureLine(line);
+    for (let index = structure.indexOf('!'); index >= 0;
+      index = structure.indexOf('!', index + 1)) {
+      const prefix = structure.slice(0, index);
+      const trimmedPrefix = prefix.trimEnd();
+      const preceding = trimmedPrefix.at(-1) ?? '';
+      if (trimmedPrefix === '' || '[{,?'.includes(preceding) ||
+          (preceding === '-' && trimmedPrefix.trimStart() === '-') || preceding === ':') {
+        return true;
+      }
+    }
+    if (/(?:^|:)\s*[>|][0-9+-]*\s*$/u.test(structure)) {
+      blockScalarIndent = indentation;
+    }
+  }
+  return false;
+};
+if (Object.values(workflows).some(hasExplicitYamlTag)) {
   fail('Explicit YAML tags are forbidden in relay workflows');
 }
 const relayModel = workflowModels['relay-process-environment.yml'];
