@@ -505,6 +505,8 @@ try {
     ['numeric local-tagged key', '!trigger 123:'],
     ['empty local-tagged key', '!trigger "":'],
     ['flow local-tagged key', 'push: {}\n  flow_probe: { !trigger pull_request: {} }'],
+    ['flow-sequence local-tagged key', 'push: {}\n  flow_probe: [!trigger pull_request: {}]'],
+    ['block-sequence local-tagged key', 'push: {}\n  block_probe:\n    - !trigger pull_request: {}'],
   ]) {
     expectRejected(`execution workflow rejects ${label}`, (root) => {
       replace(
