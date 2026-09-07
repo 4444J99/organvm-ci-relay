@@ -84,7 +84,7 @@
         "python-ruff-pytest-v1"
       ],
       "regression_candidate": {
-        "sha": "40026461978855cb63dade9ce4a501328c9b8600",
+        "sha": "0000000000000000000000000000000000000000",
         "profile": "python-ruff-pytest-v1"
       }
     },
