@@ -67,7 +67,7 @@
     "target": "organvm/process-environment-enactment",
     "sha": "ffebb6fa1020098e18020f6a4a845cf933c0df3c",
     "profile": "process-environment-enactment-v1",
-    "lead_provider": "relay-push-canary"
+    "lead_provider": "candidate-head-canary"
   },
   "targets": {
     "organvm/process-environment-enactment": {
