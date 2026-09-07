@@ -122,7 +122,7 @@
       }
     },
     "organvm/alchemical-synthesizer": {
-      "stable_repository_id": "1157553907",
+      "stable_repository_id": "1157553908",
       "visibility": "public",
       "profiles": [
         "alchemical-smoke-release-node22-v1"
