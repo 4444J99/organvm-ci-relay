@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { runInNewContext } from 'node:vm';
 
 const invocationRoot = process.cwd();
 const baseRootIndex = process.argv.indexOf('--base-root');
@@ -18,6 +19,80 @@ const sourceRoot = fs.realpathSync(path.resolve(invocationRoot, requestedBaseRoo
 const fixtureRoots = [];
 let regressionCount = 0;
 let acceptanceCount = 0;
+let receiptRuntimeCount = 0;
+
+// Execute the actual inline builder with synthetic environment values and an
+// in-memory filesystem. No GitHub calls, writes, or target code are permitted.
+const receiptWorkflow = fs.readFileSync(
+  path.join(sourceRoot, '.github/workflows/relay-process-environment.yml'),
+  'utf8',
+);
+const receiptMarker = '        name: Build canonical receipt from trusted job results';
+const receiptStepStart = receiptWorkflow.indexOf(receiptMarker);
+assert(receiptStepStart >= 0, 'canonical receipt step must exist');
+assert.equal(receiptWorkflow.indexOf(receiptMarker, receiptStepStart + 1), -1);
+const receiptScriptStart = receiptWorkflow.indexOf(
+  "          const fs = require('fs');", receiptStepStart,
+);
+const receiptScriptEnd = receiptWorkflow.indexOf('\n          NODE', receiptScriptStart);
+assert(receiptScriptStart > receiptStepStart && receiptScriptEnd > receiptScriptStart);
+const receiptBuilder = receiptWorkflow.slice(receiptScriptStart, receiptScriptEnd)
+  .replace(/^ {10}/gmu, '');
+const syntheticWorkflowRef =
+  'synthetic/relay/.github/workflows/relay-process-environment.yml@refs/heads/main';
+const syntheticReceiptEnvironment = {
+  TARGET_PROFILE_FAMILY: 'python',
+  RELAY_EVENT_NAME: 'workflow_dispatch',
+  TARGET_RUNTIME_JSON: '{"python_versions":["3.12.14"],"node_version":null}',
+  PYTHON_DISPATCH_RESULT: 'success',
+  POSIX_RESULT: 'skipped',
+  WINDOWS_RESULT: 'skipped',
+  PREPARE_REGRESSION_RESULT: 'skipped',
+  PYTHON_REGRESSION_RESULT: 'skipped',
+  TARGET_REPOSITORY_ID: '123',
+  TARGET_REPO: 'synthetic/public',
+  TARGET_SHA: 'a'.repeat(40),
+  TARGET_PROFILE: 'synthetic-profile',
+  RELAY_REPOSITORY: 'synthetic/relay',
+  RELAY_WORKFLOW_REF: syntheticWorkflowRef,
+  RELAY_WORKFLOW_SHA: 'b'.repeat(40),
+  RELAY_EVENT_SHA: 'b'.repeat(40),
+  DEFINING_WORKFLOW_REPOSITORY: 'synthetic/relay',
+  DEFINING_WORKFLOW_FILE_PATH: '.github/workflows/relay-process-environment.yml',
+  DEFINING_WORKFLOW_REF: syntheticWorkflowRef,
+  DEFINING_WORKFLOW_SHA: 'b'.repeat(40),
+  RUN_ID: '123',
+  RUN_ATTEMPT: '1',
+  RELAY_ACTOR: 'synthetic-human',
+  LEAD_PROVIDER: 'synthetic',
+  receipt_file: 'synthetic-output',
+  PRIVATE_TRACE_CANARY: 'synthetic-private-marker-must-not-leak',
+};
+const exerciseReceipt = (overrides = {}, expectedError = null) => {
+  receiptRuntimeCount += 1;
+  const writes = [];
+  const run = () => runInNewContext(receiptBuilder, {
+    require(specifier) {
+      assert.equal(specifier, 'fs');
+      return {
+        writeFileSync(file, content) {
+          assert.equal(file, 'synthetic-output');
+          writes.push(JSON.parse(content));
+        },
+      };
+    },
+    process: { env: { ...syntheticReceiptEnvironment, ...overrides } },
+  }, { timeout: 1000 });
+  if (expectedError) {
+    assert.throws(run, expectedError);
+    assert.equal(writes.length, 0, 'invalid receipt must fail before any output');
+    return null;
+  }
+  run();
+  assert.equal(writes.length, 1, 'exactly one receipt must be produced');
+  assert(!JSON.stringify(writes[0]).includes('synthetic-private-marker-must-not-leak'));
+  return writes[0];
+};
 
 const createFixture = () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'organvm-relay-policy-'));
@@ -155,6 +230,64 @@ const extractLiteralRunBlock = (source, stepName) => {
 };
 
 try {
+  const validReceipt = exerciseReceipt();
+  assert.equal(validReceipt.schema, 'organvm-ci-relay-receipt/v3');
+  assert.equal(validReceipt.evidence_origin, 'personal-account-relay-execution');
+  assert.equal(validReceipt.aggregate, 'success');
+  assert.equal(validReceipt.aggregate_scope, 'target-execution-and-required-regressions');
+  assert.equal(validReceipt.source_checkout_verified, true);
+  assert.equal(validReceipt.tests_and_assertions_executed, true);
+  assert.equal(validReceipt.publication.durable_ledger, 'not-yet-observed');
+  assert.equal(validReceipt.publication.artifact_upload, 'not-yet-observed');
+  for (const field of [
+    'RELAY_REPOSITORY', 'RELAY_WORKFLOW_REF', 'RELAY_WORKFLOW_SHA', 'RELAY_EVENT_SHA',
+    'DEFINING_WORKFLOW_REPOSITORY', 'DEFINING_WORKFLOW_FILE_PATH',
+    'DEFINING_WORKFLOW_REF', 'DEFINING_WORKFLOW_SHA',
+  ]) {
+    for (const value of ['', undefined, 'mismatched-identity']) {
+      exerciseReceipt({ [field]: value }, /Receipt workflow identity is missing or inconsistent/u);
+    }
+  }
+  exerciseReceipt({
+    RELAY_WORKFLOW_REF: syntheticWorkflowRef.replace('main', 'unreviewed'),
+    DEFINING_WORKFLOW_REF: syntheticWorkflowRef.replace('main', 'unreviewed'),
+  }, /Receipt workflow identity is missing or inconsistent/u);
+  exerciseReceipt({
+    RELAY_WORKFLOW_SHA: 'B'.repeat(40), RELAY_EVENT_SHA: 'B'.repeat(40),
+    DEFINING_WORKFLOW_SHA: 'B'.repeat(40),
+  }, /Receipt workflow identity is missing or inconsistent/u);
+  for (const overrides of [
+    { DEFINING_WORKFLOW_SHA: 'c'.repeat(40) },
+    { RELAY_EVENT_SHA: 'c'.repeat(40) },
+    { DEFINING_WORKFLOW_REPOSITORY: 'synthetic/different-relay' },
+    { DEFINING_WORKFLOW_FILE_PATH: '.github/workflows/different.yml' },
+  ]) {
+    exerciseReceipt(overrides, /Receipt workflow identity is missing or inconsistent/u);
+  }
+  for (const status of ['failure', 'cancelled', 'skipped', 'unknown']) {
+    const failedReceipt = exerciseReceipt({ PYTHON_DISPATCH_RESULT: status });
+    assert.equal(failedReceipt.aggregate, 'error');
+    assert.equal(failedReceipt.source_checkout_verified, null);
+    assert.equal(failedReceipt.tests_and_assertions_executed, null);
+    assert.equal(failedReceipt.publication.durable_ledger, 'not-yet-observed');
+  }
+  const pushReceipt = exerciseReceipt({
+    RELAY_EVENT_NAME: 'push', PREPARE_REGRESSION_RESULT: 'success',
+    PYTHON_REGRESSION_RESULT: 'success',
+    REGRESSION_MATRIX_JSON: JSON.stringify({ include: [{ sha: 'a'.repeat(40) }] }),
+  });
+  assert.equal(pushReceipt.aggregate, 'success');
+  const failedRegressions = exerciseReceipt({ RELAY_EVENT_NAME: 'push' });
+  assert.equal(failedRegressions.aggregate, 'error');
+  assert.equal(failedRegressions.tests_and_assertions_executed, null);
+  const posixReceipt = exerciseReceipt({
+    TARGET_PROFILE_FAMILY: 'process-environment', POSIX_RESULT: 'success', WINDOWS_RESULT: 'success',
+  });
+  assert.equal(posixReceipt.aggregate, 'success');
+  exerciseReceipt({ TARGET_PROFILE_FAMILY: 'unknown' }, /Unknown profile family/u);
+  const publicationSpoof = exerciseReceipt({ PUBLICATION_RESULT: 'success' });
+  assert.equal(publicationSpoof.publication.durable_ledger, 'not-yet-observed');
+
   const baseline = runVerifier(createFixture());
   assert.equal(
     baseline.status,
@@ -860,6 +993,24 @@ try {
     );
   }, /receipt push must be the only Git push command/u);
 
+  for (const [label, command] of [
+    ['Unicode nonbreaking-space hash', ': word\u00a0# && git -C ledger push origin HEAD:main'],
+    ['quoted command-name concatenation', "g'it' -C ledger push origin HEAD:main"],
+  ]) {
+    expectSelfRejected(`complete receipt seal rejects ${label}`, (root) => {
+      replaceInJob(root, 'receipt',
+        '          git -C ledger push origin HEAD:receipts',
+        '          git -C ledger push origin HEAD:receipts\n' +
+          `          ${command}`);
+    }, /complete write-enabled receipt job changed/u);
+  }
+
+  expectSelfRejected('receipt identity validation cannot be removed', (root) => {
+    replaceInJob(root, 'receipt',
+      "            throw new Error('Receipt workflow identity is missing or inconsistent');",
+      "            console.log('pretend-identity-is-valid');");
+  }, /complete write-enabled receipt job changed/u);
+
   expectRejected('folded run scalar hides a second Git push', (root) => {
     replaceInJob(
       root,
@@ -1354,7 +1505,8 @@ try {
 
   console.log(
     `verified ${regressionCount} fail-closed relay policy regressions and ` +
-      `${acceptanceCount} dynamic policy acceptance cases`,
+      `${acceptanceCount} dynamic policy acceptance cases; ` +
+      `${receiptRuntimeCount} embedded receipt runtime cases`,
   );
 } finally {
   for (const root of fixtureRoots) {
