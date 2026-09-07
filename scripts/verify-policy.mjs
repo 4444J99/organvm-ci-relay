@@ -566,7 +566,11 @@ const workflowModels = Object.fromEntries(
     buildWorkflowModel(source, file),
   ]),
 );
-if (Object.values(workflows).some((source) => /!!|!<[^>]+>/u.test(source))) {
+const taggedMappingKey =
+  /^[ \t]*![A-Za-z0-9_.-]+[ \t]+(?:[A-Za-z_][A-Za-z0-9_-]*|"[^"]+"|'[^']+')[ \t]*:/mu;
+if (Object.values(workflows).some(
+  (source) => /!!|!<[^>]+>/u.test(source) || taggedMappingKey.test(source),
+)) {
   fail('Explicit YAML tags are forbidden in relay workflows');
 }
 const relayModel = workflowModels['relay-process-environment.yml'];
