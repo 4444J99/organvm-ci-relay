@@ -1,0 +1,15 @@
+name: Duplicate relay policy canary
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  duplicate:
+    name: Relay trust policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish colliding success
+        shell: bash
+        run: 'true'
