@@ -886,13 +886,17 @@ if (fs.existsSync('receipts')) {
 
 const receiptJob = relayModel.jobs.get('receipt');
 if (!receiptJob) fail('Missing receipt job');
-const receiptIf = receiptJob.jobLevelEntries.filter((entry) => entry.key === 'if');
-const receiptNeeds = receiptJob.jobLevelEntries.filter((entry) => entry.key === 'needs');
-if (receiptIf.length !== 1 ||
-    unquoteYamlScalar(receiptIf[0].value, 'receipt job condition') !==
+const directJobValue = (job, key, context) => {
+  const entry = job.jobLevelEntries.find((candidate) => candidate.key === key);
+  return entry ? unquoteYamlScalar(entry.value, context) : null;
+};
+const directStepValue = (step, key, context) => {
+  const entry = step.directEntries.find((candidate) => candidate.key === key);
+  return entry ? unquoteYamlScalar(entry.value, context) : null;
+};
+if (directJobValue(receiptJob, 'if', 'receipt job condition') !==
       "always() && needs.authorize.result == 'success'" ||
-    receiptNeeds.length !== 1 ||
-    unquoteYamlScalar(receiptNeeds[0].value, 'receipt job dependencies') !==
+    directJobValue(receiptJob, 'needs', 'receipt job dependencies') !==
       '[authorize, posix, windows, python_dispatch, prepare_regression, python_regression]') {
   fail('Receipt job execution guard or dependencies changed');
 }
@@ -954,10 +958,6 @@ if (ledgerCheckouts.length !== 1 || receiptRefs.length !== 1 ||
 const pushCommands = findGitCommands(workflow).filter((command) =>
   commandHasSubcommand(command, 'push'),
 );
-const directStepValue = (step, key, context) => {
-  const entry = step.directEntries.find((candidate) => candidate.key === key);
-  return entry ? unquoteYamlScalar(entry.value, context) : null;
-};
 const expectedPush = [
   'git', '-C', 'ledger', 'push', 'origin', 'HEAD:receipts',
 ];
@@ -968,16 +968,16 @@ if (pushCommands.length !== 1 ||
 const receiptPushSteps = receiptSteps.filter((step) => findGitCommands(step.source)
   .some((command) => commandHasSubcommand(command, 'push')));
 if (receiptPushSteps.length !== 1 ||
-    directStepValue(receiptPushSteps[0], 'name', 'receipt push name') !==
+    directStepValue(receiptPushSteps[0], 'name', 'receipt push step name') !==
       'Commit the durable receipt' ||
-    directStepValue(receiptPushSteps[0], 'shell', 'receipt push shell') !== 'bash' ||
-    directStepValue(receiptPushSteps[0], 'if', 'receipt push condition') !== null ||
+    directStepValue(receiptPushSteps[0], 'shell', 'receipt push step shell') !== 'bash' ||
+    directStepValue(receiptPushSteps[0], 'if', 'receipt push step condition') !== null ||
     directStepValue(
       receiptPushSteps[0],
       'continue-on-error',
-      'receipt push error policy',
+      'receipt push step error policy',
     ) !== null) {
-  fail('Durable receipt push step execution guard changed');
+  fail('The durable receipt push step must run unconditionally and fail closed');
 }
 
 const normalizedExecutableLines = (source) => normalizeShellContinuations(source)
@@ -1078,7 +1078,11 @@ if (regressionIdentitySteps.length !== 1 ||
 }
 
 const requiredExecutableLines = [
+  '- ".gitattributes"',
+  '- ".github/.gitattributes"',
   '- ".github/workflows/relay-policy.yml"',
+  '- "config/.gitattributes"',
+  '- "scripts/.gitattributes"',
   '- "scripts/**"',
   'relay-${{ github.event_name == \'push\' && github.sha || format(\'{0}-{1}-{2}\', inputs.target, inputs.profile, inputs.sha) }}',
   'cancel-in-progress: ${{ github.event_name != \'push\' }}',
@@ -1120,6 +1124,31 @@ for (const line of requiredExecutableLines) {
     fail(`Missing trust-boundary command: ${line}`);
   }
 }
+const relayWorkflowLines = workflow.split('\n');
+const pushPathsStart = relayWorkflowLines.findIndex((line) => line === '    paths:');
+const workflowDispatchStart = relayWorkflowLines.findIndex(
+  (line) => line === '  workflow_dispatch:',
+);
+const observedPushPaths = pushPathsStart >= 0 && workflowDispatchStart > pushPathsStart
+  ? relayWorkflowLines.slice(pushPathsStart + 1, workflowDispatchStart)
+    .filter((line) => /^      - /u.test(line))
+    .map((line) => unquoteYamlScalar(line.slice(8), 'relay push path'))
+  : [];
+const expectedPushPaths = [
+  '.gitattributes',
+  '.github/.gitattributes',
+  '.github/workflows/relay-policy.yml',
+  '.github/workflows/relay-process-environment.yml',
+  'config/.gitattributes',
+  'config/**',
+  'profiles/**',
+  'relay',
+  'scripts/.gitattributes',
+  'scripts/**',
+];
+if (!isDeepStrictEqual(observedPushPaths, expectedPushPaths)) {
+  fail('Relay trust-root push paths changed');
+}
 if (relayModel.entries.some((entry) => entry.key === 'default')) {
   fail('Workflow dispatch inputs must be explicit and have no defaults');
 }
@@ -1143,10 +1172,9 @@ if (!policyJobName || unquoteYamlScalar(
 ) !== "${{ github.event_name == 'pull_request_target' && 'Relay trust policy' || 'Relay trust policy self-check' }}") {
   fail('Only pull_request_target may emit the required Relay trust policy context');
 }
-const policyRunCommands = extractSteps(
-  policyModel,
-  policyModel.jobs.get('policy'),
-).flatMap((step) => step.directEntries
+const policyJob = policyModel.jobs.get('policy');
+const policySteps = extractSteps(policyModel, policyJob);
+const policyRunCommands = policySteps.flatMap((step) => step.directEntries
   .filter((entry) => entry.key === 'run')
   .map((entry) => unquoteYamlScalar(entry.value, `policy run at ${entry.lineNumber}`)));
 const expectedPolicyRunCommands = [
@@ -1157,27 +1185,44 @@ const expectedPolicyRunCommands = [
 if (JSON.stringify(policyRunCommands) !== JSON.stringify(expectedPolicyRunCommands)) {
   fail('Relay policy workflow must run only the verifier and its regressions');
 }
-const policyVerificationSteps = extractSteps(
-  policyModel,
-  policyModel.jobs.get('policy'),
-).filter((step) => directStepValue(
-  step,
-  'run',
-  'policy verification run',
-) === 'node trusted/scripts/verify-policy.mjs --candidate-root "$CANDIDATE_ROOT" --base-root trusted');
-if (policyVerificationSteps.length !== 1 ||
-    directStepValue(policyVerificationSteps[0], 'name', 'policy verification name') !==
-      'Verify the candidate with the trusted base verifier' ||
-    directStepValue(policyVerificationSteps[0], 'shell', 'policy verification shell') !==
+const candidateVerificationSteps = policySteps.filter((step) =>
+  directStepValue(step, 'name', 'candidate verification step name') ===
+    'Verify the candidate with the trusted base verifier',
+);
+if (candidateVerificationSteps.length !== 1 ||
+    directStepValue(
+      candidateVerificationSteps[0],
+      'run',
+      'candidate verification command',
+    ) !== expectedPolicyRunCommands[1] ||
+    directStepValue(candidateVerificationSteps[0], 'shell', 'candidate verification shell') !==
       'bash' ||
-    directStepValue(policyVerificationSteps[0], 'if', 'policy verification condition') !==
+    directStepValue(candidateVerificationSteps[0], 'if', 'candidate verification condition') !==
       null ||
     directStepValue(
-      policyVerificationSteps[0],
+      candidateVerificationSteps[0],
       'continue-on-error',
-      'policy verification error policy',
+      'candidate verification error policy',
     ) !== null) {
-  fail('Candidate-verification step execution guard changed');
+  fail('The trusted candidate-verification step must run unconditionally and fail closed');
+}
+const policyRegressionSteps = policySteps.filter((step) =>
+  directStepValue(step, 'run', 'policy regression command') ===
+    expectedPolicyRunCommands[2],
+);
+if (policyRegressionSteps.length !== 1 ||
+    directStepValue(policyRegressionSteps[0], 'name', 'policy regression step name') !==
+      'Regress the trusted base verifier' ||
+    directStepValue(policyRegressionSteps[0], 'shell', 'policy regression step shell') !==
+      'bash' ||
+    directStepValue(policyRegressionSteps[0], 'if', 'policy regression step condition') !==
+      null ||
+    directStepValue(
+      policyRegressionSteps[0],
+      'continue-on-error',
+      'policy regression step error policy',
+    ) !== null) {
+  fail('The trusted policy-regression step must run unconditionally and fail closed');
 }
 const requiredPolicyLines = [
   'pull_request_target:',
@@ -1231,20 +1276,15 @@ for (const line of requiredPolicyLines) {
     fail(`Missing base-anchored policy command: ${line}`);
   }
 }
-const policyCandidateFetchSteps = extractSteps(
-  policyModel,
-  policyModel.jobs.get('policy'),
-).filter((step) => directStepValue(
-  step,
-  'name',
-  'policy candidate-fetch step',
-) === 'Fetch the exact pull-request head and freeze executable policy');
-const expectedPolicyCandidateFetchDigest =
+const policyFetchSteps = policySteps.filter((step) =>
+  directStepValue(step, 'name', 'policy fetch step name') ===
+    'Fetch the exact pull-request head and freeze executable policy',
+);
+const expectedPolicyFetchDigest =
   '6461dfdd9db90728f9a618e0c098de61347714080d5fb4ae22698564dca6eafa';
-if (policyCandidateFetchSteps.length !== 1 ||
-    sourceDigest(policyCandidateFetchSteps[0].source) !==
-      expectedPolicyCandidateFetchDigest) {
-  fail('Relay policy candidate-fetch trust anchor changed');
+if (policyFetchSteps.length !== 1 ||
+    sourceDigest(policyFetchSteps[0].source) !== expectedPolicyFetchDigest) {
+  fail('The trusted pull-request fetch and freeze commands changed');
 }
 if (policyLines.has('pull_request:')) {
   fail('Relay policy must not execute candidate-controlled pull_request workflow code');
@@ -1274,8 +1314,7 @@ const expectedRelayJobs = [
 if (!isDeepStrictEqual([...relayModel.jobs.keys()], expectedRelayJobs)) {
   fail('Relay workflow job allowlist changed');
 }
-
-const expectedJobRunners = new Map([
+const expectedRunnerLabels = new Map([
   ['relay-policy.yml:policy', 'ubuntu-latest'],
   ['relay-process-environment.yml:authorize', 'ubuntu-latest'],
   ['relay-process-environment.yml:posix', '${{ matrix.os }}'],
@@ -1285,65 +1324,71 @@ const expectedJobRunners = new Map([
   ['relay-process-environment.yml:python_regression', 'ubuntu-latest'],
   ['relay-process-environment.yml:receipt', 'ubuntu-latest'],
 ]);
-let observedJobCount = 0;
 for (const [file, model] of Object.entries(workflowModels)) {
   for (const job of model.jobs.values()) {
-    observedJobCount += 1;
-    const context = `${file}:${job.id}`;
-    const runners = job.jobLevelEntries.filter((entry) => entry.key === 'runs-on');
-    if (runners.length !== 1 ||
-        unquoteYamlScalar(runners[0].value, `${context} runner`) !==
-          expectedJobRunners.get(context)) {
-      fail(`Workflow job runner changed: ${context}`);
+    const identity = `${file}:${job.id}`;
+    if (directJobValue(job, 'runs-on', `${identity} runner`) !==
+        expectedRunnerLabels.get(identity)) {
+      fail(`Workflow job must use its reviewed GitHub-hosted runner: ${identity}`);
     }
-    if (job.jobLevelEntries.some((entry) => entry.key === 'continue-on-error')) {
-      fail(`Workflow jobs may not suppress failure: ${context}`);
+    if (directJobValue(job, 'continue-on-error', `${identity} error policy`) !== null) {
+      fail(`Workflow jobs may not suppress failures: ${identity}`);
+    }
+    if (job.jobLevelEntries.some((entry) => entry.key === 'container')) {
+      fail(`Workflow jobs may not declare containers: ${identity}`);
     }
   }
 }
-if (observedJobCount !== expectedJobRunners.size) {
-  fail('Workflow job runner allowlist is incomplete');
-}
-const posixRunnerMatrix = relayModel.jobs.get('posix').source
-  .split('\n')
-  .map((line) => line.trim())
-  .filter((line) => line.startsWith('- os:'));
-if (!isDeepStrictEqual(posixRunnerMatrix, [
-  '- os: ubuntu-latest',
-  '- os: macos-latest',
-])) {
-  fail('POSIX runner matrix changed');
-}
-const pythonDispatchJob = relayModel.jobs.get('python_dispatch');
-const dispatchStrategy = pythonDispatchJob.jobLevelEntries.find(
+const posixJob = relayModel.jobs.get('posix');
+const posixStrategy = posixJob.jobLevelEntries.find(
   (entry) => entry.key === 'strategy',
 );
-const dispatchStrategyEntries = nestedMappingEntries(
+const nextPosixJobEntry = posixJob.entries.find(
+  (entry) => entry.line > posixStrategy?.line && entry.indent <= posixStrategy.indent,
+);
+const posixStrategySource = posixStrategy
+  ? relayModel.lines.slice(
+    posixStrategy.line,
+    nextPosixJobEntry?.line ?? posixJob.end,
+  ).join('\n')
+  : '';
+if (sourceDigest(posixStrategySource) !==
+    '0fa91498eb218894ef7bf6b1d1a24119b24e0a04280f642b763d8fed2f627e12') {
+  fail('POSIX jobs must use only the reviewed GitHub-hosted runner matrix');
+}
+
+const pythonDispatchJob = relayModel.jobs.get('python_dispatch');
+const pythonDispatchStrategy = pythonDispatchJob.jobLevelEntries.find(
+  (entry) => entry.key === 'strategy',
+);
+if (!pythonDispatchStrategy || pythonDispatchStrategy.value !== '') {
+  fail('python_dispatch strategy must use one reviewed block mapping');
+}
+const pythonDispatchStrategyEntries = nestedMappingEntries(
   pythonDispatchJob.entries,
-  dispatchStrategy,
+  pythonDispatchStrategy,
   pythonDispatchJob.end,
   'python_dispatch strategy',
 );
-const dispatchMatrix = dispatchStrategyEntries.find((entry) => entry.key === 'matrix');
-const dispatchMatrixEntries = nestedMappingEntries(
+const pythonDispatchMatrix = pythonDispatchStrategyEntries.find(
+  (entry) => entry.key === 'matrix',
+);
+if (!pythonDispatchMatrix || pythonDispatchMatrix.value !== '') {
+  fail('python_dispatch matrix must use one reviewed block mapping');
+}
+const pythonDispatchMatrixEntries = nestedMappingEntries(
   pythonDispatchJob.entries,
-  dispatchMatrix,
+  pythonDispatchMatrix,
   pythonDispatchJob.end,
   'python_dispatch matrix',
 );
-if (!dispatchStrategy || dispatchStrategy.value !== '' ||
-    !dispatchMatrix || dispatchMatrix.value !== '' ||
-    !isDeepStrictEqual(
-      dispatchStrategyEntries.map((entry) => entry.key),
-      ['fail-fast', 'max-parallel', 'matrix'],
-    ) ||
-    dispatchMatrixEntries.length !== 1 ||
-    dispatchMatrixEntries[0].key !== 'python-version' ||
+if (pythonDispatchMatrixEntries.length !== 1 ||
+    pythonDispatchMatrixEntries[0].key !== 'python-version' ||
     unquoteYamlScalar(
-      dispatchMatrixEntries[0].value,
-      'python_dispatch matrix axis',
+      pythonDispatchMatrixEntries[0].value,
+      'python_dispatch Python version axis',
     ) !== '${{ fromJSON(needs.authorize.outputs.python_versions) }}') {
-  fail('Python dispatch matrix mapping changed');
+  fail('python_dispatch matrix must contain only the authorized Python version axis');
 }
 
 const actionSignatures = [];

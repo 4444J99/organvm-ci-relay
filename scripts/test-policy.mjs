@@ -119,6 +119,173 @@ try {
     0,
     `baseline failed\n${baseline.stdout}\n${baseline.stderr}`,
   );
+  const readme = fs.readFileSync(path.join(sourceRoot, 'README.md'), 'utf8');
+  assert.match(
+    readme,
+    /both Python jobs use the pinned\s+`actions\/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97`/u,
+    'README must identify the pinned Python setup action',
+  );
+  assert.match(
+    readme,
+    /A candidate-head required context remains deferred until/u,
+    'README must not claim pull_request_target publishes a candidate-head check',
+  );
+
+  for (const attributePath of [
+    '.gitattributes',
+    '.github/.gitattributes',
+    'config/.gitattributes',
+    'scripts/.gitattributes',
+  ]) {
+    expectRejected(`trust-root push filter retains ${attributePath}`, (root) => {
+      replace(
+        root,
+        '.github/workflows/relay-process-environment.yml',
+        `      - "${attributePath}"\n`,
+        '',
+      );
+    }, new RegExp(
+      `Missing trust-boundary command: - "${attributePath.replaceAll('.', '\\.') }"`,
+      'u',
+    ));
+  }
+  expectRejected('trust-root push paths reject a decoy attribute entry', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-process-environment.yml',
+      '      - ".gitattributes"\n',
+      '',
+    );
+    replaceInJob(
+      root,
+      'receipt',
+      '            ${{ steps.canonical.outputs.receipt_file }}.sha256',
+      '            ${{ steps.canonical.outputs.receipt_file }}.sha256\n' +
+        '            - ".gitattributes"',
+    );
+  }, /Relay trust-root push paths changed/u);
+
+  expectRejected('trusted policy fetch block rejects appended execution', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '          set -euo pipefail\n          [[ "$BASE_REPOSITORY"',
+      '          set -euo pipefail\n          echo unauthorized\n          [[ "$BASE_REPOSITORY"',
+    );
+  }, /trusted pull-request fetch and freeze commands changed/u);
+
+  expectRejected('policy candidate verification cannot suppress failure', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '      - name: Verify the candidate with the trusted base verifier\n' +
+        '        shell: bash',
+      '      - name: Verify the candidate with the trusted base verifier\n' +
+        '        continue-on-error: true\n' +
+        '        shell: bash',
+    );
+  }, /trusted candidate-verification step must run unconditionally and fail closed/u);
+
+  for (const [label, injected] of [
+    ['condition', '        if: false\n'],
+    ['failure suppression', '        continue-on-error: true\n'],
+  ]) {
+    expectRejected(`policy regression step rejects ${label}`, (root) => {
+      replace(
+        root,
+        '.github/workflows/relay-policy.yml',
+        '      - name: Regress the trusted base verifier\n' +
+          '        shell: bash',
+        '      - name: Regress the trusted base verifier\n' +
+          injected +
+          '        shell: bash',
+      );
+    }, /trusted policy-regression step must run unconditionally and fail closed/u);
+  }
+
+  expectRejected('workflow jobs cannot use self-hosted runners', (root) => {
+    replaceInJob(
+      root,
+      'windows',
+      '    runs-on: windows-latest',
+      '    runs-on: self-hosted',
+    );
+  }, /Workflow job must use its reviewed GitHub-hosted runner/u);
+
+  expectRejected('POSIX matrix cannot add a self-hosted runner', (root) => {
+    replaceInJob(
+      root,
+      'posix',
+      '          - os: macos-latest\n' +
+        '            receipt_label: macos',
+      '          - os: macos-latest\n' +
+        '            receipt_label: macos\n' +
+        '          - os: self-hosted\n' +
+        '            receipt_label: persistent',
+    );
+  }, /POSIX jobs must use only the reviewed GitHub-hosted runner matrix/u);
+
+  expectRejected('execution jobs cannot suppress failure', (root) => {
+    replaceInJob(
+      root,
+      'python_dispatch',
+      '    timeout-minutes: 35',
+      '    timeout-minutes: 35\n    continue-on-error: true',
+    );
+  }, /Workflow jobs may not suppress failures/u);
+
+  expectRejected('receipt job cannot declare a container', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      '    runs-on: ubuntu-latest',
+      '    runs-on: ubuntu-latest\n' +
+        '    container: attacker.example/relay:latest',
+    );
+  }, /Workflow jobs may not declare containers/u);
+
+  expectRejected('receipt job cannot be disabled', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      "    if: always() && needs.authorize.result == 'success'",
+      '    if: false',
+    );
+  }, /Receipt job execution guard or dependencies changed/u);
+
+  expectRejected('receipt dependencies cannot omit regressions', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      '    needs: [authorize, posix, windows, python_dispatch, prepare_regression, python_regression]',
+      '    needs: [authorize, posix, windows, python_dispatch, prepare_regression]',
+    );
+  }, /Receipt job execution guard or dependencies changed/u);
+
+  expectRejected('durable receipt push cannot be disabled', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      '      - name: Commit the durable receipt\n' +
+        '        shell: bash',
+      '      - name: Commit the durable receipt\n' +
+        '        if: false\n' +
+        '        shell: bash',
+    );
+  }, /durable receipt push step must run unconditionally and fail closed/u);
+
+  expectRejected('Python dispatch matrix cannot exclude an authorized runtime', (root) => {
+    replaceInJob(
+      root,
+      'python_dispatch',
+      '      matrix:\n' +
+        '        python-version: ${{ fromJSON(needs.authorize.outputs.python_versions) }}',
+      '      matrix:\n' +
+        '        python-version: ${{ fromJSON(needs.authorize.outputs.python_versions) }}\n' +
+        '        exclude:\n' +
+        '          - python-version: "3.12.14"',
+    );
+  }, /python_dispatch matrix must contain only the authorized Python version axis/u);
 
   expectRejected('indexed secrets context', (root) => {
     replace(
@@ -474,88 +641,6 @@ try {
     );
   }, /receipt push must be the only Git push command/u);
 
-  expectRejected('policy candidate-fetch block rejects additive commands', (root) => {
-    replace(
-      root,
-      '.github/workflows/relay-policy.yml',
-      '          set -euo pipefail\n          [[ "$BASE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]',
-      '          set -euo pipefail\n          echo additive-command\n' +
-        '          [[ "$BASE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]',
-    );
-  }, /Relay policy candidate-fetch trust anchor changed/u);
-
-  expectRejected('self-hosted runner substitution', (root) => {
-    replaceInJob(root, 'windows', '    runs-on: windows-latest', '    runs-on: self-hosted');
-  }, /Workflow job runner changed: relay-process-environment\.yml:windows/u);
-
-  expectRejected('self-hosted POSIX matrix expansion', (root) => {
-    replaceInJob(
-      root,
-      'posix',
-      '          - os: macos-latest',
-      '          - os: macos-latest\n          - os: self-hosted',
-    );
-  }, /POSIX runner matrix changed/u);
-
-  expectRejected('job-level failure suppression', (root) => {
-    replaceInJob(
-      root,
-      'python_regression',
-      '    runs-on: ubuntu-latest',
-      '    runs-on: ubuntu-latest\n    continue-on-error: true',
-    );
-  }, /Workflow jobs may not suppress failure/u);
-
-  expectRejected('receipt job cannot be disabled', (root) => {
-    replaceInJob(
-      root,
-      'receipt',
-      "    if: always() && needs.authorize.result == 'success'",
-      '    if: false',
-    );
-  }, /Receipt job execution guard or dependencies changed/u);
-
-  expectRejected('receipt dependencies cannot omit regressions', (root) => {
-    replaceInJob(
-      root,
-      'receipt',
-      '    needs: [authorize, posix, windows, python_dispatch, prepare_regression, python_regression]',
-      '    needs: [authorize, posix, windows, python_dispatch, prepare_regression]',
-    );
-  }, /Receipt job execution guard or dependencies changed/u);
-
-  expectRejected('candidate verification cannot suppress failure', (root) => {
-    replace(
-      root,
-      '.github/workflows/relay-policy.yml',
-      '      - name: Verify the candidate with the trusted base verifier\n' +
-        '        shell: bash',
-      '      - name: Verify the candidate with the trusted base verifier\n' +
-        '        continue-on-error: true\n' +
-        '        shell: bash',
-    );
-  }, /Candidate-verification step execution guard changed/u);
-
-  expectRejected('durable receipt push step cannot be disabled', (root) => {
-    replaceInJob(
-      root,
-      'receipt',
-      '      - name: Commit the durable receipt\n        shell: bash',
-      '      - name: Commit the durable receipt\n        if: false\n        shell: bash',
-    );
-  }, /Durable receipt push step execution guard changed/u);
-
-  expectRejected('Python dispatch matrix cannot exclude an authorized runtime', (root) => {
-    replaceInJob(
-      root,
-      'python_dispatch',
-      '        python-version: ${{ fromJSON(needs.authorize.outputs.python_versions) }}',
-      '        python-version: ${{ fromJSON(needs.authorize.outputs.python_versions) }}\n' +
-        '        exclude:\n' +
-        '          - python-version: 3.12.14',
-    );
-  }, /Python dispatch matrix mapping changed/u);
-
   expectRejected('folded run scalar hides a second Git push', (root) => {
     replaceInJob(
       root,
@@ -687,6 +772,15 @@ try {
       'prepare_regression',
       '          const MAX_REGRESSION_JOBS = 32;',
       '          const MAX_REGRESSION_JOBS = 33;',
+    );
+  }, /prepare_regression registry accounting anchors changed/u);
+
+  expectRejected('prepare regression cannot truthiness-skip malformed candidates', (root) => {
+    replaceInJob(
+      root,
+      'prepare_regression',
+      "            if (!Object.hasOwn(entry ?? {}, 'regression_candidate')) continue;",
+      '            if (!candidate) continue;',
     );
   }, /prepare_regression registry accounting anchors changed/u);
 
@@ -887,6 +981,26 @@ try {
       ];
     });
   }, /Invalid regression candidate record: organvm\/laurea/u);
+
+  for (const malformedCandidate of [null, false, 0, '']) {
+    expectRejected(
+      `target rejects malformed regression candidate ${JSON.stringify(malformedCandidate)}`,
+      (root) => {
+        mutateRegistry(root, (registry) => {
+          registry.targets['organvm/laurea'].regression_candidate = malformedCandidate;
+        });
+      },
+      /Invalid regression candidate record: organvm\/laurea/u,
+    );
+  }
+
+  expectRejected('registry requires at least one regression job', (root) => {
+    mutateRegistry(root, (registry) => {
+      for (const entry of Object.values(registry.targets)) {
+        delete entry.regression_candidate;
+      }
+    });
+  }, /Regression matrix must contain at least one job/u);
 
   expectRejected('target registry rejects more than 64 records', (root) => {
     mutateRegistry(root, (registry) => {

@@ -6,11 +6,15 @@ on:
   push:
     branches: [main]
     paths:
+      - ".gitattributes"
+      - ".github/.gitattributes"
       - ".github/workflows/relay-policy.yml"
       - ".github/workflows/relay-process-environment.yml"
+      - "config/.gitattributes"
       - "config/**"
       - "profiles/**"
       - "relay"
+      - "scripts/.gitattributes"
       - "scripts/**"
   workflow_dispatch:
     inputs:

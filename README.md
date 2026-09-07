@@ -62,11 +62,11 @@ never accept a runner label, shell command, secret, artifact path, or arbitrary
 workflow. The registry binds each target to a stable GitHub repository ID and
 to a reviewed profile family. Python matrices are derived only from frozen
 profile metadata: exact CPython `3.11.16` and/or `3.12.14`. Hybrid profiles may
-also request exact Node `22.23.2`; both Python jobs use pinned
-`actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97` for CPython
-and conditionally use
-`actions/setup-node@820762786026740c76f36085b0efc47a31fe5020` with automatic
-package-manager caching disabled. The non-Python family publishes a
+also request exact Node `22.23.2`; both Python jobs use the pinned
+`actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97` action.
+Their optional Node runtimes use the pinned
+`actions/setup-node@820762786026740c76f36085b0efc47a31fe5020` action with
+automatic package-manager caching disabled. The non-Python family publishes a
 non-executed `3.12.14` fallback solely so GitHub can expand the skipped Python
 matrix safely. Moving major aliases such as `3.12` and `22`, Node 20, and
 target-provided declarative commands are rejected.
@@ -150,16 +150,19 @@ status-signing root. Cross-repository status publication remains deferred.
 - No payment method, paid runner, organization transfer, or vendor-specific App
   setting is part of normal dispatch.
 
-## Required-check and bootstrap contract
+## Required-check limitation and bootstrap contract
 
-Protect `main` with the required context `Relay trust policy`, expected from
-GitHub Actions, and require branches to be strictly up to date with `main`
-before merge. Base-branch advances do not themselves create a new
-`pull_request_target` run, so strict/up-to-date enforcement is part of the
-security boundary. The canonical workflow gives push and manual diagnostics a
-different context, `Relay trust policy self-check`; those runs must never be
-selected as the PR requirement. Merge queue is not supported until this design
-has a separately anchored `merge_group` implementation.
+Do not configure `Relay trust policy` as a candidate-head required context
+yet. GitHub attaches a `pull_request_target` workflow's check suite to the base
+event SHA, even though this workflow securely fetches and verifies the exact
+candidate `HEAD_SHA`. This repository intentionally grants the policy workflow
+only `contents: read`, so it cannot publish a separate check or commit status
+on the candidate head. A candidate-head required context remains deferred until
+a workflow-identity-bound ruleset control or dedicated GitHub App can publish
+it without weakening the zero-secrets and least-privilege boundary. Push and
+manual diagnostics use the separate `Relay trust policy self-check` context.
+Merge queue is not supported until this design has a separately anchored
+`merge_group` implementation.
 
 GitHub's status-check identity is an app plus a context string, not a workflow
 file identity. A branch with workflow-write access can deliberately create a
@@ -175,9 +178,10 @@ This PR is the bootstrap: the version of `relay-policy.yml` already on `main`
 uses candidate-controlled `pull_request`, so it cannot authenticate the change
 that replaces it. Bootstrap exactly once by auditing and merging the expected
 head SHA under a narrow administrator bypass. Then let the `main` push
-self-check finish, open a benign data-only PR to establish the new required
-context on its head SHA, and run frozen-file plus duplicate-name adversarial
-canaries. Bind or restore the ruleset only after those checks behave as stated.
+self-check finish, open a benign data-only PR to exercise the trusted verifier,
+and run frozen-file plus duplicate-name adversarial canaries. Bind a strict
+candidate-head rule only after the separate head-bound publisher exists and
+those checks behave as stated.
 
 After bootstrap, executable trust-root changes fail by design. For a necessary
 workflow, verifier, test, launcher, profile implementation or metadata, or governing Git
