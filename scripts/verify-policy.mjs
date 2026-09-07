@@ -1303,7 +1303,7 @@ const operationalShaSteps = policySteps.filter((step) =>
     'Verify every registered operational SHA exists',
 );
 const expectedOperationalShaDigest =
-  '318664d54da19f67baa8c40a08f49cb995029f99929cf500162e02af8f07e791';
+  '943ed2ea09bdd2e80ea99c39d801b82b27fe3103c4c6df79931e01dbb2c972be';
 if (operationalShaSteps.length !== 1 ||
     directStepValue(operationalShaSteps[0], 'if', 'operational SHA condition') !==
       "github.event_name == 'pull_request_target'" ||
@@ -1313,6 +1313,7 @@ if (operationalShaSteps.length !== 1 ||
       'continue-on-error',
       'operational SHA error policy',
     ) !== null ||
+    !/ {14}LIVE_REPOSITORY_JSON="\$live_json" node <<'NODE'\n[\s\S]*?\n {10}NODE\n {12}index=\$\(\(index \+ 1\)\)/u.test(policyWorkflow) ||
     sourceDigest(operationalShaSteps[0].source) !== expectedOperationalShaDigest) {
   fail('The operational SHA existence gate changed');
 }
