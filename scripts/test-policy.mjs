@@ -500,6 +500,22 @@ try {
     );
   }, /Explicit YAML tags are forbidden/u);
 
+  for (const [label, taggedKey] of [
+    ['URI-character local tag', '!trigger/v1 pull_request:'],
+    ['numeric local-tagged key', '!trigger 123:'],
+    ['empty local-tagged key', '!trigger "":'],
+    ['flow local-tagged key', 'push: {}\n  flow_probe: { !trigger pull_request: {} }'],
+  ]) {
+    expectRejected(`execution workflow rejects ${label}`, (root) => {
+      replace(
+        root,
+        '.github/workflows/relay-process-environment.yml',
+        'on:\n  push:',
+        `on:\n  ${taggedKey}`,
+      );
+    }, /Explicit YAML tags are forbidden/u);
+  }
+
   expectRejected('workflow jobs cannot use self-hosted runners', (root) => {
     replaceInJob(
       root,

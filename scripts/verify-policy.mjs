@@ -571,7 +571,7 @@ const workflowModels = Object.fromEntries(
   ]),
 );
 const taggedMappingKey =
-  /^[ \t]*!(?:[A-Za-z0-9_.-]+)?[ \t]+(?:[A-Za-z_][A-Za-z0-9_-]*|"[^"]+"|'[^']+')[ \t]*:/mu;
+  /(?:^|[,{])[ \t]*!(?:[^\s[\]{},]+)?[ \t]+[^#\r\n]*?[ \t]*:/mu;
 if (Object.values(workflows).some(
   (source) => /!!|!<[^>]+>/u.test(source) || taggedMappingKey.test(source),
 )) {
