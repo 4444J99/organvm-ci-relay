@@ -252,6 +252,33 @@ try {
     );
   }, /operational SHA existence gate changed/u);
 
+  expectSelfRejected('operational SHA gate requires commit objects', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '            [[ "$(git -C "$directory" cat-file -t FETCH_HEAD)" == commit ]]\n',
+      '',
+    );
+  }, /operational SHA existence gate changed/u);
+
+  expectSelfRejected('operational SHA gate binds live repository IDs', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '                String(live.full_name).toLowerCase() !== process.env.REPOSITORY.toLowerCase() ||\n',
+      '',
+    );
+  }, /operational SHA existence gate changed/u);
+
+  expectRejected('execution workflow rejects added triggers', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-process-environment.yml',
+      'on:\n  push:',
+      'on:\n  pull_request:\n  push:',
+    );
+  }, /Relay execution trigger allowlist changed/u);
+
   expectRejected('workflow jobs cannot use self-hosted runners', (root) => {
     replaceInJob(
       root,
