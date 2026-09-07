@@ -886,6 +886,8 @@ if (fs.existsSync('receipts')) {
 
 const receiptJob = relayModel.jobs.get('receipt');
 if (!receiptJob) fail('Missing receipt job');
+const expectedReceiptJobDigest =
+  '8e9cd5836e9ae6b629a883c36c7b6c9c78deab9cae0039fa2a710fa18c645155';
 const directJobValue = (job, key, context) => {
   const entry = job.jobLevelEntries.find((candidate) => candidate.key === key);
   return entry ? unquoteYamlScalar(entry.value, context) : null;
@@ -1276,6 +1278,52 @@ for (const line of requiredPolicyLines) {
     fail(`Missing base-anchored policy command: ${line}`);
   }
 }
+const policyOnEntries = policyModel.entries.filter(
+  (entry) => entry.indent === 0 && !entry.listItem && entry.key === 'on',
+);
+if (policyOnEntries.length !== 1 || policyOnEntries[0].value !== '') {
+  fail('Relay policy triggers must use one reviewed block mapping');
+}
+const policyTriggerEntries = nestedMappingEntries(
+  policyModel.entries,
+  policyOnEntries[0],
+  policyModel.lines.length,
+  'relay policy triggers',
+);
+if (!isDeepStrictEqual(
+  policyTriggerEntries.map((entry) => entry.key),
+  ['pull_request_target', 'push', 'workflow_dispatch'],
+)) {
+  fail('Relay policy trigger allowlist changed');
+}
+const expectedPolicyTriggerMappings = new Map([
+  ['pull_request_target', new Map([
+    ['branches', '[main]'],
+    ['types', '[opened, reopened, synchronize, ready_for_review, edited]'],
+  ])],
+  ['push', new Map([
+    ['branches', '[main]'],
+  ])],
+  ['workflow_dispatch', new Map()],
+]);
+for (const trigger of policyTriggerEntries) {
+  if (trigger.value !== '') fail(`Relay policy trigger must use a mapping: ${trigger.key}`);
+  const children = nestedMappingEntries(
+    policyModel.entries,
+    trigger,
+    policyModel.lines.length,
+    `relay policy trigger ${trigger.key}`,
+  );
+  const actual = new Map(children.map((entry) => [
+    entry.key,
+    unquoteYamlScalar(entry.value, `relay policy trigger ${trigger.key} ${entry.key}`),
+  ]));
+  const expected = expectedPolicyTriggerMappings.get(trigger.key);
+  if (!expected || actual.size !== expected.size ||
+      [...expected].some(([key, value]) => actual.get(key) !== value)) {
+    fail(`Relay policy trigger mapping changed: ${trigger.key}`);
+  }
+}
 const policyFetchSteps = policySteps.filter((step) =>
   directStepValue(step, 'name', 'policy fetch step name') ===
     'Fetch the exact pull-request head and freeze executable policy',
@@ -1485,6 +1533,97 @@ const stepWithValues = (step, context) => {
   ]));
 };
 
+const jobMappingValues = (job, key, context) => {
+  const entry = job.jobLevelEntries.find((candidate) => candidate.key === key);
+  if (!entry || entry.value !== '') fail(`${context} must use one block mapping`);
+  const values = nestedMappingEntries(
+    job.entries,
+    entry,
+    job.end,
+    `${context} mapping`,
+  );
+  return new Map(values.map((value) => [
+    value.key,
+    unquoteYamlScalar(value.value, `${context} ${value.key}`),
+  ]));
+};
+
+const expectedExecutionEnvironments = new Map([
+  ['posix', new Map([
+    ['TARGET_REPO', '${{ needs.authorize.outputs.full_name }}'],
+    ['TARGET_SHA', '${{ needs.authorize.outputs.sha }}'],
+    ['TARGET_PROFILE', '${{ needs.authorize.outputs.profile }}'],
+    ['RELAY_SHA', '${{ needs.authorize.outputs.relay_sha }}'],
+    ['RECEIPT_LABEL', '${{ matrix.receipt_label }}'],
+  ])],
+  ['windows', new Map([
+    ['TARGET_REPO', '${{ needs.authorize.outputs.full_name }}'],
+    ['TARGET_SHA', '${{ needs.authorize.outputs.sha }}'],
+    ['TARGET_PROFILE', '${{ needs.authorize.outputs.profile }}'],
+    ['RELAY_SHA', '${{ needs.authorize.outputs.relay_sha }}'],
+    ['RECEIPT_LABEL', 'windows'],
+  ])],
+  ['python_dispatch', new Map([
+    ['GIT_TERMINAL_PROMPT', '0'],
+    ['PIP_NO_INPUT', '1'],
+    ['TARGET_REPO', '${{ needs.authorize.outputs.full_name }}'],
+    ['TARGET_SHA', '${{ needs.authorize.outputs.sha }}'],
+    ['TARGET_PROFILE', '${{ needs.authorize.outputs.profile }}'],
+    ['RELAY_SHA', '${{ needs.authorize.outputs.relay_sha }}'],
+  ])],
+  ['python_regression', new Map([
+    ['GIT_TERMINAL_PROMPT', '0'],
+    ['PIP_NO_INPUT', '1'],
+    ['TARGET_REPO', '${{ matrix.repository }}'],
+    ['TARGET_REPOSITORY_ID', '${{ matrix.stable_repository_id }}'],
+    ['TARGET_SHA', '${{ matrix.sha }}'],
+    ['TARGET_PROFILE', '${{ matrix.profile }}'],
+    ['RELAY_SHA', '${{ github.sha }}'],
+  ])],
+]);
+for (const [jobId, expected] of expectedExecutionEnvironments) {
+  const actual = jobMappingValues(
+    relayModel.jobs.get(jobId),
+    'env',
+    `${jobId} execution environment`,
+  );
+  if (actual.size !== expected.size ||
+      [...expected].some(([key, value]) => actual.get(key) !== value)) {
+    fail(`Execution job environment changed: ${jobId}`);
+  }
+}
+
+const authorizeJob = relayModel.jobs.get('authorize');
+const authorizeCheckoutSteps = extractSteps(relayModel, authorizeJob).filter((step) =>
+  directStepValue(step, 'uses', 'authorize checkout action') ===
+    'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+);
+const expectedAuthorizeCheckout = new Map([
+  ['ref', '${{ github.sha }}'],
+  ['persist-credentials', 'false'],
+]);
+if (authorizeCheckoutSteps.length !== 1 ||
+    directStepValue(authorizeCheckoutSteps[0], 'name', 'authorize checkout name') !==
+      'Check out trusted relay configuration' ||
+    directStepValue(authorizeCheckoutSteps[0], 'if', 'authorize checkout condition') !== null ||
+    directStepValue(
+      authorizeCheckoutSteps[0],
+      'continue-on-error',
+      'authorize checkout error policy',
+    ) !== null) {
+  fail('Authorization checkout step changed');
+}
+const authorizeCheckoutValues = stepWithValues(
+  authorizeCheckoutSteps[0],
+  'authorize checkout',
+);
+if (authorizeCheckoutValues.size !== expectedAuthorizeCheckout.size ||
+    [...expectedAuthorizeCheckout].some(
+      ([key, value]) => authorizeCheckoutValues.get(key) !== value
+    )) {
+  fail('Authorization checkout inputs must bind to the event SHA');
+}
+
 const assertRuntimeSetupSteps = (jobId, pythonExpression, nodeExpression, nodeIf) => {
   const job = relayModel.jobs.get(jobId);
   const steps = extractSteps(relayModel, job);
@@ -1582,6 +1721,10 @@ for (const relativePath of trustedProfiles) {
   if (trusted.mode !== candidate.mode || !trusted.bytes.equals(candidate.bytes)) {
     fail(`Frozen executable trust root changed: ${relativePath}`);
   }
+}
+if (createHash('sha256').update(receiptJob.source).digest('hex') !==
+    expectedReceiptJobDigest) {
+  fail('The complete write-enabled receipt job changed');
 }
 
 console.log(

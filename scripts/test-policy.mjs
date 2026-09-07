@@ -39,14 +39,14 @@ const createFixture = () => {
   return root;
 };
 
-const runVerifier = (root) => spawnSync(
+const runVerifier = (root, trustedRoot = sourceRoot) => spawnSync(
   process.execPath,
   [
     path.join(sourceRoot, 'scripts', 'verify-policy.mjs'),
     '--candidate-root',
     root,
     '--base-root',
-    sourceRoot,
+    trustedRoot,
   ],
   { cwd: sourceRoot, encoding: 'utf8' },
 );
@@ -112,6 +112,23 @@ const expectAccepted = (name, mutate) => {
   );
 };
 
+const expectSelfRejected = (name, mutate, expectedDiagnostic) => {
+  regressionCount += 1;
+  const root = createFixture();
+  mutate(root);
+  const result = runVerifier(root, root);
+  assert.notEqual(
+    result.status,
+    0,
+    `${name} unexpectedly passed\n${result.stdout}\n${result.stderr}`,
+  );
+  assert.match(
+    result.stderr,
+    expectedDiagnostic,
+    `${name} failed for the wrong reason\n${result.stdout}\n${result.stderr}`,
+  );
+};
+
 try {
   const baseline = runVerifier(createFixture());
   assert.equal(
@@ -158,9 +175,9 @@ try {
     );
     replaceInJob(
       root,
-      'receipt',
-      '            ${{ steps.canonical.outputs.receipt_file }}.sha256',
-      '            ${{ steps.canonical.outputs.receipt_file }}.sha256\n' +
+      'posix',
+      '            target/posix-output.sha256',
+      '            target/posix-output.sha256\n' +
         '            - ".gitattributes"',
     );
   }, /Relay trust-root push paths changed/u);
@@ -173,6 +190,27 @@ try {
       '          set -euo pipefail\n          echo unauthorized\n          [[ "$BASE_REPOSITORY"',
     );
   }, /trusted pull-request fetch and freeze commands changed/u);
+
+  expectRejected('policy trigger lines cannot hide in a block scalar', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '  pull_request_target:\n' +
+        '    branches: [main]\n' +
+        '    types: [opened, reopened, synchronize, ready_for_review, edited]\n',
+      '',
+    );
+    replace(
+      root,
+      '.github/workflows/relay-policy.yml',
+      '\npermissions:\n',
+      '\nrun-name: |\n' +
+        '  pull_request_target:\n' +
+        '    branches: [main]\n' +
+        '    types: [opened, reopened, synchronize, ready_for_review, edited]\n' +
+        '\npermissions:\n',
+    );
+  }, /Relay policy trigger allowlist changed/u);
 
   expectRejected('policy candidate verification cannot suppress failure', (root) => {
     replace(
@@ -234,10 +272,10 @@ try {
     );
   }, /Workflow jobs may not suppress failures/u);
 
-  expectRejected('receipt job cannot declare a container', (root) => {
+  expectRejected('execution job cannot declare a container', (root) => {
     replaceInJob(
       root,
-      'receipt',
+      'python_dispatch',
       '    runs-on: ubuntu-latest',
       '    runs-on: ubuntu-latest\n' +
         '    container: attacker.example/relay:latest',
@@ -252,6 +290,34 @@ try {
       '    if: false',
     );
   }, /Receipt job execution guard or dependencies changed/u);
+
+  expectRejected('authorization checkout cannot select another ref', (root) => {
+    replaceInJob(
+      root,
+      'authorize',
+      '          ref: ${{ github.sha }}',
+      '          ref: attacker-controlled',
+    );
+  }, /Authorization checkout inputs must bind to the event SHA/u);
+
+  for (const [jobId, binding, expected] of [
+    ['posix', 'TARGET_REPO', '${{ needs.authorize.outputs.full_name }}'],
+    ['posix', 'TARGET_SHA', '${{ needs.authorize.outputs.sha }}'],
+    ['posix', 'RELAY_SHA', '${{ needs.authorize.outputs.relay_sha }}'],
+    ['posix', 'TARGET_PROFILE', '${{ needs.authorize.outputs.profile }}'],
+    ['windows', 'TARGET_PROFILE', '${{ needs.authorize.outputs.profile }}'],
+    ['python_dispatch', 'TARGET_PROFILE', '${{ needs.authorize.outputs.profile }}'],
+    ['python_regression', 'TARGET_PROFILE', '${{ matrix.profile }}'],
+  ]) {
+    expectRejected(`${jobId} binds ${binding} to trusted output`, (root) => {
+      replaceInJob(
+        root,
+        jobId,
+        `      ${binding}: ${expected}`,
+        `      ${binding}: bypass-value`,
+      );
+    }, new RegExp(`Execution job environment changed: ${jobId}`, 'u'));
+  }
 
   expectRejected('receipt dependencies cannot omit regressions', (root) => {
     replaceInJob(
@@ -273,6 +339,20 @@ try {
         '        shell: bash',
     );
   }, /durable receipt push step must run unconditionally and fail closed/u);
+
+  expectSelfRejected('receipt job rejects an extra forgery command', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      '      - name: Upload canonical receipt pair',
+      '      - name: Forge canonical receipt\n' +
+        '        shell: bash\n' +
+        '        run: sed -i \'s/"aggregate": "error"/"aggregate": "success"/\' ' +
+          '"$RECEIPT_FILE"\n' +
+        '\n' +
+        '      - name: Upload canonical receipt pair',
+    );
+  }, /complete write-enabled receipt job changed/u);
 
   expectRejected('Python dispatch matrix cannot exclude an authorized runtime', (root) => {
     replaceInJob(
