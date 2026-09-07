@@ -65,7 +65,7 @@
   },
   "canary": {
     "target": "organvm/process-environment-enactment",
-    "sha": "ffebb6fa1020098e18020f6a4a845cf933c0df3c",
+    "sha": "1111111111111111111111111111111111111111",
     "profile": "process-environment-enactment-v1",
     "lead_provider": "relay-push-canary"
   },
