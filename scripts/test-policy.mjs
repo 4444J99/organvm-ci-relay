@@ -545,6 +545,15 @@ try {
     );
   }, /Missing trust-boundary command: exact_regression_matrix|receipt.*regression|regression.*receipt/iu);
 
+  expectRejected('receipt drops defining workflow SHA', (root) => {
+    replaceInJob(
+      root,
+      'receipt',
+      '          DEFINING_WORKFLOW_SHA: ${{ job.workflow_sha }}',
+      '          DEFINING_WORKFLOW_SHA: omitted',
+    );
+  }, /Missing trust-boundary command: DEFINING_WORKFLOW_SHA/u);
+
   expectRejected('Python dispatch matrix cannot become static', (root) => {
     replaceInJob(
       root,
