@@ -600,7 +600,7 @@ const expectedProfileDigests = new Map([
   ['profiles/alchemical-smoke-release-node22-v1.sh',
     'd1c43d899479f6fb049ab9302dc35d33e6774d3a259b63d66d32163e67cbba02'],
   ['profiles/danse-portable-v1.sh',
-    '204c82bcafced0679dd7b9aadeabe7386d6df12e7bd8f96c3c87a6f3d0e7c138'],
+    '9f017a2c889fd6a9c105c25047e54f7cfd566e0b5668f37828e0ba7342f62279'],
   ['profiles/organvm-engine-v1.sh',
     '310f49b96e346a011988a94baf9a7f8eb8f8b7af06dfe8f57834dfef9adcf3d8'],
   ['profiles/process-environment-enactment-v1.ps1',
