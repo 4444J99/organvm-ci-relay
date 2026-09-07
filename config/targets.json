@@ -78,7 +78,7 @@
       ]
     },
     "organvm/learning-resources": {
-      "stable_repository_id": "1155240211",
+      "stable_repository_id": "1155240212",
       "visibility": "public",
       "profiles": [
         "python-ruff-pytest-v1"
