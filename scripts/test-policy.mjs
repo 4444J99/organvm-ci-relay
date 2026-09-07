@@ -133,7 +133,13 @@ const extractLiteralRunBlock = (source, stepName) => {
   const lines = source.split('\n');
   const step = lines.findIndex((line) => line === `      - name: ${stepName}`);
   assert.notEqual(step, -1, `workflow step is missing: ${stepName}`);
-  const run = lines.findIndex((line, index) => index > step && line === '        run: |');
+  const followingStep = lines.findIndex(
+    (line, index) => index > step && line.startsWith('      - '),
+  );
+  const stepEnd = followingStep < 0 ? lines.length : followingStep;
+  const run = lines.findIndex(
+    (line, index) => index > step && index < stepEnd && line === '        run: |',
+  );
   assert.notEqual(run, -1, `literal run block is missing: ${stepName}`);
   const body = [];
   for (let index = run + 1; index < lines.length; index += 1) {
@@ -346,6 +352,24 @@ try {
       '.github/workflows/relay-process-environment.yml',
       'on:\n  push:',
       'on:\n  !!str pull_request:\n  push:',
+    );
+  }, /Explicit YAML tags are forbidden/u);
+
+  expectRejected('execution workflow rejects local-tagged trigger keys', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-process-environment.yml',
+      'on:\n  push:',
+      'on:\n  !trigger pull_request:\n  push:',
+    );
+  }, /Explicit YAML tags are forbidden/u);
+
+  expectRejected('execution workflow rejects bare-tagged trigger keys', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-process-environment.yml',
+      'on:\n  push:',
+      'on:\n  ! pull_request:\n  push:',
     );
   }, /Explicit YAML tags are forbidden/u);
 
