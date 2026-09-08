@@ -51,6 +51,12 @@ for (const [source, expected] of [
   ["probe: 'literal\n {? [a]:!!str text}'\n", false],
   ['probe:\n  - name: safe - |\n    run: !!str echo\n', true],
   ['probe:\n  - |\n    run: !!str text inside a block scalar\n', false],
+  ['probe:\n  - - !!str evil\n', true],
+  ['probe:\n  - - - !local evil\n', true],
+  ['probe:\n  -  - !<tag:yaml.org,2002:str> evil\n', true],
+  ['run: echo - - !!str literal\n', false],
+  ['probe: \"- - !!str literal\"\n', false],
+  ['probe:\n  - - |\n      !!str literal\n', false],
 ]) {
   assert.equal(runInNewContext(`${yamlDetector}\nhasExplicitYamlTag(source)`, { source }), expected,
     `YAML boundary fixture: ${JSON.stringify(source)}`);
@@ -631,6 +637,11 @@ try {
       expectSelfRejected(`unsupported explicit flow key ${index} in ${workflowFile}`, (root) => {
         fs.appendFileSync(path.join(root, workflowFile), `\nprobe: ${fixture}\n`);
       }, /Explicit (?:or ambiguous YAML flow|YAML mapping) keys are not allowed/u);
+    }
+    for (const value of ['- - !!str evil', '- - - !local evil', '-  - !<tag:yaml.org,2002:str> evil']) {
+      expectSelfRejected(`nested block sequence tag ${value} in ${workflowFile}`, (root) => {
+        fs.appendFileSync(path.join(root, workflowFile), `\nprobe:\n  ${value}\n`);
+      }, /Explicit YAML tags are forbidden/u);
     }
     for (const fixture of ["echo http:'", 'echo text["', "echo\n  '"]) {
       expectSelfRejected(`plain scalar ${fixture} cannot hide a later tag in ${workflowFile}`, (root) => {

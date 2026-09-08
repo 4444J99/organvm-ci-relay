@@ -689,7 +689,7 @@ const inspectYamlSyntax = (source) => {
       const trimmedPrefix = prefix.trimEnd();
       const preceding = trimmedPrefix.at(-1) ?? '';
       if (trimmedPrefix === '' || trimmedPrefix === '---' || '[{,?'.includes(preceding) ||
-          (preceding === '-' && trimmedPrefix.trimStart() === '-') ||
+          (preceding === '-' && /^(?:-\s+)*-$/u.test(trimmedPrefix.trimStart())) ||
           (preceding === ':' && (/:\s+$/u.test(prefix) ||
             collectionValueColons.has(trimmedPrefix.length - 1) ||
             /(?:^|[,{])\s*(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*')\s*:\s*$/u.test(line.slice(0, index))))) {
