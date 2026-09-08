@@ -8,8 +8,9 @@ GitHub Actions job with the same display name from satisfying protection.
 ## Install
 
 1. Select an independently audited immutable revision using the pinned-release procedure below; deploy that artifact on an approved HTTPS Node 22 host with `npm start`.
-2. Create the private GitHub App from `app-manifest.json`, replacing the two
-   deployment URLs. Generate its private key and install it only on
+2. Register the private GitHub App manually using the field mapping below.
+   `app-manifest.json` is a permissions reference, not a complete manifest
+   conversion flow. Generate its private key and install it only on
    `4444J99/organvm-ci-relay`.
 3. Set `APP_ID`, `PRIVATE_KEY`, `WEBHOOK_SECRET`,
    `REPOSITORY=4444J99/organvm-ci-relay`, `REPOSITORY_ID=1350979676`, `INSTALLATION_ID`, and
@@ -109,7 +110,7 @@ activation. Do not invent a second scheduler or receipt ledger for this purpose.
 2. Verify an eligible independent reviewer exists. This tree has no CODEOWNERS;
    `require_code_owner_reviews` alone does not create an owner or satisfy independent
    approval. Preserve the mandatory independent approval and latest-push rule.
-3. Create the private App from the supplied manifest with real HTTPS endpoints,
+3. Register the private App using the manual field mapping below,
    deploy the audited immutable artifact with its generated secrets, and verify a
    signed test delivery. The instance must be on an approved, existing host; do not
    purchase hosting or authorize new account/billing commitments.
@@ -168,3 +169,37 @@ observations go into the existing activation evidence register.
 Sources: [branch protection API](https://docs.github.com/en/rest/branches/branch-protection),
 [workflow-required rule scope](https://docs.github.com/enterprise-cloud%40latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
 [failed webhook redelivery](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries).
+
+### Complete manual App registration path
+
+An administrator can use GitHub Settings → Developer settings → GitHub Apps →
+New GitHub App. This service intentionally has no `/installed` callback or manifest
+conversion endpoint. Do not POST the example manifest expecting it to provision
+credentials. Use these manual fields instead:
+
+| Registration field | Value |
+| --- | --- |
+| GitHub App name | ORGANVM Relay Admission, or an available owner-approved name |
+| Homepage URL | https://github.com/4444J99/organvm-ci-relay |
+| Webhook active / URL | Active; the approved deployment's HTTPS `/webhook` URL |
+| Webhook secret | Generate a new random secret privately, enter it in GitHub and the deployment's WEBHOOK_SECRET; never publish it |
+| OAuth/user authorization callback | Not used; do not request user authorization during installation |
+| Repository permissions | Actions read; Checks read/write; Contents read; Pull requests read; Metadata read |
+| Organization/account permissions | None |
+| Events | Workflow run |
+| Installation visibility | Only this account |
+
+After creating the App, record its numeric App ID; generate/download its private
+key and install it using Install App → select only `organvm-ci-relay`. Record the
+actual installation ID from that installation's settings URL/readback. Supply
+APP_ID, INSTALLATION_ID, PRIVATE_KEY and the **same manually chosen webhook secret**
+to the audited deployment through the approved host's secret manager. The service
+does not need an OAuth client secret or access to an account-wide token. Delete no
+existing key/deployment until the replacement's custody and rollback are verified.
+
+Use the App's Recent Deliveries page to redeliver a signed workflow_run event and
+observe the resulting pending/completed Check Run and exact producer ID. A health
+response is not successful webhook delivery or an installation receipt. No actual
+App name, secret, key, host, installation or approval is supplied by this packet.
+
+Reference: [manual GitHub App registration](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).

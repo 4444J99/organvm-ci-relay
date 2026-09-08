@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 const [filename, id] = process.argv.slice(2);
-assert.ok(filename && /^[1-9][0-9]*$/.test(id ?? ''), 'Usage: node enforcement/verify-readback.mjs READBACK_JSON APP_ID');
+const appId = Number(id);
+assert.ok(filename && /^[1-9][0-9]*$/.test(id ?? '') && Number.isSafeInteger(appId), 'Usage: node enforcement/verify-readback.mjs READBACK_JSON APP_ID');
 const value = JSON.parse(fs.readFileSync(filename, 'utf8'));
 assert.equal(value.required_status_checks?.strict, true);
-assert.deepEqual(value.required_status_checks.checks, [{ context: 'Relay admission / trusted', app_id: Number(id) }]);
+assert.deepEqual(value.required_status_checks.checks, [{ context: 'Relay admission / trusted', app_id: appId }]);
 assert.equal(value.enforce_admins?.enabled, true);
 const reviews = value.required_pull_request_reviews;
 assert.ok(reviews?.required_approving_review_count >= 1);
