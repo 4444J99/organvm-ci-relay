@@ -518,6 +518,25 @@ try {
     }, /Explicit YAML tags are forbidden/u);
   }
 
+  expectSelfRejected('plain-scalar apostrophe cannot hide a later explicit tag', (root) => {
+    replace(
+      root,
+      '.github/workflows/relay-process-environment.yml',
+      'on:\n  push:',
+      "on:\n  probe: {SAFE: don't, !!str EVIL: value}\n  push:",
+    );
+  }, /Explicit YAML tags are forbidden/u);
+
+  expectSelfRejected('document marker cannot hide an explicit tag', (root) => {
+    for (const workflowFile of [
+      '.github/workflows/relay-process-environment.yml',
+      '.github/workflows/relay-policy.yml',
+    ]) {
+      const file = path.join(root, workflowFile);
+      fs.writeFileSync(file, `--- !!map\n${fs.readFileSync(file, 'utf8')}`);
+    }
+  }, /Explicit YAML tags are forbidden/u);
+
   expectRejected('workflow jobs cannot use self-hosted runners', (root) => {
     replaceInJob(
       root,

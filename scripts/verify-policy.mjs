@@ -593,7 +593,10 @@ const yamlStructureLine = (line) => {
       }
       continue;
     }
-    if (character === '"' || character === "'") {
+    const trimmedResult = result.trimEnd();
+    const scalarBoundary = trimmedResult === '' || '[{,?:'.includes(trimmedResult.at(-1)) ||
+      (trimmedResult.at(-1) === '-' && trimmedResult.trimStart() === '-');
+    if ((character === '"' || character === "'") && scalarBoundary) {
       quote = character;
       result += ' ';
       continue;
@@ -612,18 +615,19 @@ const hasExplicitYamlTag = (source) => {
       if (indentation > blockScalarIndent) continue;
       blockScalarIndent = null;
     }
-    const structure = yamlStructureLine(line);
+    const structure = yamlStructureLine(line)
+      .replace(/\$\{\{.*?\}\}/gu, (expression) => ' '.repeat(expression.length));
     for (let index = structure.indexOf('!'); index >= 0;
       index = structure.indexOf('!', index + 1)) {
       const prefix = structure.slice(0, index);
       const trimmedPrefix = prefix.trimEnd();
       const preceding = trimmedPrefix.at(-1) ?? '';
-      if (trimmedPrefix === '' || '[{,?'.includes(preceding) ||
+      if (trimmedPrefix === '' || trimmedPrefix === '---' || '[{,?'.includes(preceding) ||
           (preceding === '-' && trimmedPrefix.trimStart() === '-') || preceding === ':') {
         return true;
       }
     }
-    if (/(?:^|:)\s*[>|][0-9+-]*\s*$/u.test(structure)) {
+    if (/(?:^|:|-)\s*[>|][0-9+-]*\s*$/u.test(structure)) {
       blockScalarIndent = indentation;
     }
   }
