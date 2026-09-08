@@ -14,7 +14,7 @@ GitHub Actions job with the same display name from satisfying protection.
 3. Set `APP_ID`, `PRIVATE_KEY`, `WEBHOOK_SECRET`,
    `REPOSITORY=4444J99/organvm-ci-relay`, `REPOSITORY_ID=1350979676`, and
    `PORT` on the host.
-4. Replace `REPLACE_WITH_NUMERIC_APP_ID` in
+4. Replace the numeric placeholder `0` used for `app_id` in
    `enforcement/branch-protection.json`, then apply it with an administrator
    token:
 

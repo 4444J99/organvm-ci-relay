@@ -19,5 +19,6 @@ test('webhook verification is timing-safe and exact', () => {
   const body = Buffer.from(JSON.stringify(payload)); const secret = 'test-secret';
   const sig = `sha256=${crypto.createHmac('sha256', secret).update(body).digest('hex')}`;
   assert.equal(verifyWebhook(body, sig, secret), true); assert.equal(verifyWebhook(Buffer.from('x'), sig, secret), false);
+  assert.equal(verifyWebhook(body, [sig], secret), false);
 });
 test('check name is stable', () => assert.equal(CHECK_NAME, 'Relay admission / trusted'));

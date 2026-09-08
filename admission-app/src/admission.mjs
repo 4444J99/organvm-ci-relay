@@ -4,7 +4,7 @@ export const CHECK_NAME = 'Relay admission / trusted';
 export const TRUSTED_WORKFLOW_PATH = '.github/workflows/relay-policy.yml';
 
 export function verifyWebhook(rawBody, signature, secret) {
-  if (!signature?.startsWith('sha256=') || !secret) return false;
+  if (typeof signature !== 'string' || !signature.startsWith('sha256=') || !secret) return false;
   const expected = `sha256=${crypto.createHmac('sha256', secret).update(rawBody).digest('hex')}`;
   const a = Buffer.from(signature);
   const b = Buffer.from(expected);

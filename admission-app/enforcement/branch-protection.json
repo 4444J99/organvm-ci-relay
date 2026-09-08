@@ -2,7 +2,7 @@
   "required_status_checks": {
     "strict": true,
     "checks": [
-      { "context": "Relay admission / trusted", "app_id": "REPLACE_WITH_NUMERIC_APP_ID" }
+      { "context": "Relay admission / trusted", "app_id": 0 }
     ]
   },
   "enforce_admins": true,

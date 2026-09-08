@@ -5,12 +5,23 @@ import { installationToken, publishCheck, verifyCurrentPullRequest } from './git
 const required = ['APP_ID', 'PRIVATE_KEY', 'WEBHOOK_SECRET', 'REPOSITORY', 'REPOSITORY_ID'];
 for (const key of required) if (!process.env[key]) throw new Error(`${key} is required`);
 const privateKey = process.env.PRIVATE_KEY.replaceAll('\\n', '\n');
+const MAX_WEBHOOK_BYTES = 1024 * 1024;
 
 http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/healthz') { res.writeHead(200); return res.end('ok\n'); }
   if (req.method !== 'POST' || req.url !== '/webhook') { res.writeHead(404); return res.end(); }
+  req.setTimeout(10_000, () => req.destroy(new Error('webhook read timeout')));
+  const declaredLength = Number(req.headers['content-length'] || 0);
+  if (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > MAX_WEBHOOK_BYTES) {
+    res.writeHead(413); return res.end('payload too large');
+  }
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let received = 0;
+  for await (const chunk of req) {
+    received += chunk.length;
+    if (received > MAX_WEBHOOK_BYTES) { res.writeHead(413); return res.end('payload too large'); }
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks);
   if (!verifyWebhook(raw, req.headers['x-hub-signature-256'], process.env.WEBHOOK_SECRET)) { res.writeHead(401); return res.end('invalid signature'); }
   if (req.headers['x-github-event'] !== 'workflow_run') { res.writeHead(202); return res.end('ignored'); }
