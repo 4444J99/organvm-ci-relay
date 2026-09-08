@@ -28,11 +28,69 @@ for (const [source, expected] of [
   ['run: http:!bad\n', false],
   ['probe: {"a":!!str b}\n', true],
   ["probe: {'a':!!str b}\n", true],
+  ['probe: {[a]:!!str b}\n', true],
+  ['probe: {{a: b}:!!str c}\n', true],
+  ['probe: {[]:!local value}\n', true],
+  ['probe: {{}:!<tag:yaml.org,2002:str> value}\n', true],
+  ['probe: {[[a], {b: c}]:!!str d}\n', true],
+  ['probe: {[a] :!!str b}\n', true],
+  ['probe: [{[a]:!!str b}]\n', true],
+  ['probe: {outer:\n {[a]:!!str b}}\n', true],
+  ["probe: echo\n  '\nother: !!str evil\n", true],
+  ['probe: echo\n  "\nother: !!str evil\n', true],
+  ['run: echo [a]:!!str b\n', false],
+  ['run: echo {a}:!!str b\n', false],
+  ['run: echo {[a]:!!str b}\n', false],
+  ['run: echo {? [a]:!!str b}\n', false],
+  ['probe: "{[a]:!!str b}"\n', false],
+  ["probe: '{[a]:!!str b}'\n", false],
+  ['probe: {[a]: "!!str b"}\n', false],
+  ['probe: {[a]: b} # {[a]:!!str comment}\n', false],
+  ['run: |\n  echo {[a]:!!str b}\n', false],
+  ['probe: "literal\n {? [a]:!!str text}"\n', false],
+  ["probe: 'literal\n {? [a]:!!str text}'\n", false],
   ['probe:\n  - name: safe - |\n    run: !!str echo\n', true],
   ['probe:\n  - |\n    run: !!str text inside a block scalar\n', false],
 ]) {
   assert.equal(runInNewContext(`${yamlDetector}\nhasExplicitYamlTag(source)`, { source }), expected,
     `YAML boundary fixture: ${JSON.stringify(source)}`);
+}
+for (const punctuation of [':', ',', '[', '{', '?']) {
+  for (const quote of ["'", '"']) {
+    const source = `probe: echo text${punctuation}${quote}\nother: !!str evil\n`;
+    assert.equal(runInNewContext(`${yamlDetector}\ninspectYamlSyntax(source)`, { source }),
+      'tag', `plain-scalar punctuation cannot open a quote: ${JSON.stringify(source)}`);
+  }
+}
+const explicitFlowKeyFixtures = [
+  '{ ? [a\n ]:!!str b\n}',
+  '{ ? [a]\n :!!str b\n}',
+  '{ ? {a: b\n }:!!str c\n}',
+  '{ ? "a"\n :!!str b\n}',
+  '{ ? "a\n b":!!str c\n}',
+  "{ ? 'a\n b':!!str c\n}",
+  '{ ? "a":!!str b}',
+  "{ ? 'a':!!str b}",
+  '{\n ?[a\n ]:!!str b\n}',
+  '{\n ?"a\n b":!!str c\n}',
+  '{safe: value, ? [a\n ]:!!str b\n}',
+  '{ ? [a]: untagged}',
+  '{outer:\n {? "a":!!str b}}',
+];
+for (const fixture of explicitFlowKeyFixtures) {
+  const source = `probe: ${fixture}\n`;
+  assert.equal(runInNewContext(`${yamlDetector}\ninspectYamlSyntax(source)`, { source }),
+    'explicit-key', `unsupported flow key fixture: ${JSON.stringify(source)}`);
+}
+for (const source of [
+  'run: echo {? [a]:!!str b}\n',
+  'probe: "literal\n {? [a]:!!str text}"\n',
+  "probe: 'literal\n {? [a]:!!str text}'\n",
+  'run: |\n  echo {? [a]:!!str b}\n',
+  'probe: {safe: value} # {? [a]:!!str comment}\n',
+]) {
+  assert.equal(runInNewContext(`${yamlDetector}\ninspectYamlSyntax(source)`, { source }),
+    null, `literal question-mark fixture: ${JSON.stringify(source)}`);
 }
 
 // Execute the trusted inline builder with synthetic environment values and a
@@ -557,6 +615,28 @@ try {
       const file = path.join(root, workflowFile);
       fs.appendFileSync(file, '\nprobe: {"a":!!str b}\n');
     }, /Explicit YAML tags are forbidden/u);
+    for (const [label, source] of [
+      ['sequence key', '{[a]:!!str b}'],
+      ['mapping key', '{{a: b}:!!str c}'],
+      ['empty sequence key with local tag', '{[]:!local value}'],
+      ['empty mapping key with verbatim tag', '{{}:!<tag:yaml.org,2002:str> value}'],
+      ['nested collection key', '{[[a], {b: c}]:!!str d}'],
+      ['collection value after an end-of-line colon', '{outer:\n {[a]:!!str b}}'],
+    ]) {
+      expectSelfRejected(`flow ${label} cannot hide an adjacent tag in ${workflowFile}`, (root) => {
+        fs.appendFileSync(path.join(root, workflowFile), `\nprobe: ${source}\n`);
+      }, /Explicit YAML tags are forbidden/u);
+    }
+    for (const [index, fixture] of explicitFlowKeyFixtures.entries()) {
+      expectSelfRejected(`unsupported explicit flow key ${index} in ${workflowFile}`, (root) => {
+        fs.appendFileSync(path.join(root, workflowFile), `\nprobe: ${fixture}\n`);
+      }, /Explicit (?:or ambiguous YAML flow|YAML mapping) keys are not allowed/u);
+    }
+    for (const fixture of ["echo http:'", 'echo text["', "echo\n  '"]) {
+      expectSelfRejected(`plain scalar ${fixture} cannot hide a later tag in ${workflowFile}`, (root) => {
+        fs.appendFileSync(path.join(root, workflowFile), `\nprobe: ${fixture}\nother: !!str evil\n`);
+      }, /Explicit YAML tags are forbidden/u);
+    }
   }
 
   expectRejected('workflow jobs cannot use self-hosted runners', (root) => {

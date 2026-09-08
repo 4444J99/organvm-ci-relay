@@ -3,7 +3,10 @@
 This dedicated GitHub App converts the base-controlled `relay-policy.yml`
 workflow result into an app-bound check named `Relay admission / trusted`.
 Requiring that context together with this App's numeric ID prevents another
-GitHub Actions job with the same display name from satisfying protection.
+GitHub Actions job with the same display name from satisfying that producer
+requirement. It does not synchronously revoke a prior success when a same-head
+evaluation starts. PR #30 remains blocked on that separate freshness boundary;
+the installation payload below is staged configuration, not activation approval.
 
 ## Install
 
@@ -119,7 +122,8 @@ activation. Do not invent a second scheduler or receipt ledger for this purpose.
    `node enforcement/render-config.mjs "$APP_ID" > protection.rendered.json`
 
    The generator rejects zero, negative IDs, strings that are not decimal IDs,
-   and unsafe integers. Apply `protection.rendered.json` using the PUT shown above,
+   unsafe integers, and the shared GitHub Actions App ID `15368`. Apply
+   `protection.rendered.json` using the PUT shown above,
    then GET `/repos/4444J99/organvm-ci-relay/branches/main/protection` to
    `protection.readback.json` and run:
 
@@ -147,6 +151,9 @@ activation. Do not invent a second scheduler or receipt ledger for this purpose.
 | Failure arrives while older success completes | The newer pending/failure Check Run remains authoritative after the old check ID is completed; merge stays blocked. |
 | Crash after pending Check Run creation | Actual pending custody blocks merge; authorized redelivery recovers the decision. |
 | Webhook/API failure before pending custody | Failure is observed and redelivered; no custody is invented. |
+| Same-head reevaluation starts before its webhook arrives | The prior App success must not permit a merge during the delivery gap; this implementation does not yet enforce this. |
+| New run starts while an older success is fetching job logs | A stale final publication must not make the head mergeable. Another GET alone is not an atomic merge gate. |
+| Rejected branch publishes a lookalike Actions check on an already-admitted different head | Repository-scoped `checks: write` must not combine with that head's stale App success to satisfy the gate. |
 
 Never submit an actual adversarial merge while effective enforcement is unknown.
 First obtain a definitive blocked decision with the trusted failure present. If a
@@ -165,6 +172,39 @@ App identity must be replaced, repeat identity binding and all canaries. Restori
 previously unprotected settings or adding a bypass is not a rollback strategy.
 Keep the existing receipt-v3 ledger untouched; all App installation/readback/canary
 observations go into the existing activation evidence register.
+
+### Open freshness boundary
+
+The pending Check Run exists only after this service receives an authenticated
+delivery, obtains an installation token, and completes `startCheck`. An earlier
+success remains present before that point. The existing after-custody concurrency
+tests do not prove revocation before delivery, and a bounded API timeout does not
+eliminate the interval. A newer evaluation can also start between final API reads
+and success publication. Keep review thread
+[3959647411](https://github.com/4444J99/organvm-ci-relay/pull/30#discussion_r3959647411)
+open until an enforced freshness boundary and live adversarial merge decisions
+establish closure.
+
+Adding the native `Relay trust policy` context alongside this App is insufficient
+on its own: a writer-controlled workflow on another branch can use repository-wide
+Checks write permission to attach a lookalike Actions check to the already-admitted
+head. The frozen-root comparison rejects that branch for admission, but does not
+prevent its workflow from running or constrain its token to its own commit.
+
+The remaining architectural paths are a GitHub workflow-identity rule at a supported
+organization/enterprise scope, or an enforceable merge controller that coordinates
+reevaluation and merge authority. Any controller must use the existing governance
+machinery and technically exclude uncontrolled merge/rerun paths. Neither a
+second polling loop nor a documented operator convention supplies that boundary.
+The relay's purpose is to retain a healthy personal-account execution plane while
+organization runners are unavailable; an organization route must first establish
+plan eligibility and runner/billing viability without losing that capability.
+Ownership transfer, new merge authority, or broader App permissions requires an
+explicitly selected direction before implementation. Do not enable this staged
+App-only payload and label the resulting repository strictly activated.
+
+Primary API contracts: [check creation and arbitrary commit head_sha](https://docs.github.com/en/rest/checks/runs#create-a-check-run),
+[workflow Checks permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions).
 
 Sources: [branch protection API](https://docs.github.com/en/rest/branches/branch-protection),
 [workflow-required rule scope](https://docs.github.com/enterprise-cloud%40latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
