@@ -8,7 +8,7 @@ const env = { APP_ID: '1', PRIVATE_KEY: 'test-key', WEBHOOK_SECRET: 'test-secret
 const sha = 'a'.repeat(40);
 function body(conclusion = 'failure') { return JSON.stringify({ installation: { id: 7 }, repository: { id: 1350979676, full_name: env.REPOSITORY }, workflow_run: { id: 9, run_attempt: 2, head_sha: sha, path: '.github/workflows/relay-policy.yml', event: 'pull_request_target', status: 'completed', conclusion, pull_requests: [{ number: 30, head: { sha }, base: { ref: 'main', sha: 'b'.repeat(40), repo: { id: 1350979676 } } }] } }); }
 async function withServer(dependencies, fn) {
-  const server = createAdmissionServer(env, dependencies);
+  const server = createAdmissionServer(env, { startCheck: async () => ({ id: 1 }), ...dependencies });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   try { await fn(`http://127.0.0.1:${server.address().port}/webhook`); }
   finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
@@ -49,5 +49,33 @@ test('oversized declared body rejected without invoking provider', async () => {
       const req = http.request(url, { method: 'POST', headers: { 'Content-Length': String(2 * 1024 * 1024) } }, res => { assert.equal(res.statusCode, 413); res.resume(); res.on('end', resolve); });
       req.on('error', reject); req.end();
     });
+  });
+});
+
+test('later failed delivery takes durable pending custody while earlier success awaits completion', async () => {
+  let nextId = 0; const checks = new Map(); let releaseSuccess; let enteredSuccess;
+  const started = new Promise(resolve => { enteredSuccess = resolve; });
+  const release = new Promise(resolve => { releaseSuccess = resolve; });
+  await withServer({
+    installationToken: async () => 'token',
+    startCheck: async () => { const id = ++nextId; checks.set(id, 'in_progress'); return { id }; },
+    verifyCurrentPullRequest: async (_t, _r, result) => result,
+    publishCheck: async (_t, _r, result) => {
+      if (result.admitted) { enteredSuccess(); await release; }
+      checks.set(result.checkId, result.admitted ? 'success' : 'failure');
+    }
+  }, async url => {
+    const first = fetch(url, signed(body('success'))); await started;
+    const second = await fetch(url, signed(body('failure')));
+    assert.equal(second.status, 202); assert.equal(checks.get(2), 'failure');
+    releaseSuccess(); assert.equal((await first).status, 202);
+    assert.equal(checks.get(1), 'success'); assert.equal(checks.get(2), 'failure');
+    // The old completion only patches ID1; the newer canonical check is untouched.
+  });
+});
+test('verification failure retains its pending GitHub check instead of losing custody', async () => {
+  const checks = new Map();
+  await withServer({ installationToken: async () => 'token', startCheck: async () => { checks.set(1, 'in_progress'); return { id: 1 }; }, verifyCurrentPullRequest: async () => { throw new Error('unavailable'); }, publishCheck: async () => assert.fail('must not publish') }, async url => {
+    const response = await fetch(url, signed(body())); assert.equal(response.status, 503); assert.equal(checks.get(1), 'in_progress');
   });
 });

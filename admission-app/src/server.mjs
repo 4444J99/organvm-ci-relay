@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { evaluateWorkflowRun, verifyWebhook } from './admission.mjs';
-import { installationToken, publishCheck, verifyCurrentPullRequest } from './github.mjs';
+import { installationToken, publishCheck, startCheck, verifyCurrentPullRequest } from './github.mjs';
 
 export function createAdmissionServer(env = process.env, dependencies = {}) {
   const required = ['APP_ID', 'PRIVATE_KEY', 'WEBHOOK_SECRET', 'REPOSITORY', 'REPOSITORY_ID', 'INSTALLATION_ID'];
@@ -13,17 +13,14 @@ export function createAdmissionServer(env = process.env, dependencies = {}) {
   const getToken = dependencies.installationToken ?? installationToken;
   const verify = dependencies.verifyCurrentPullRequest ?? verifyCurrentPullRequest;
   const publish = dependencies.publishCheck ?? publishCheck;
+  const reserveCheck = dependencies.startCheck ?? startCheck;
   const readTimeout = dependencies.readTimeout ?? 2000;
   const maximumBytes = 1024 * 1024;
-  // One audited instance, one publication at a time. Busy deliveries are rejected
-  // explicitly; they are never acknowledged as if durable custody existed.
-  let processing = false;
   return http.createServer({ requestTimeout: readTimeout, headersTimeout: readTimeout }, async (req, res) => {
     const reply = (status, message) => { if (!res.headersSent && !res.destroyed) { res.writeHead(status); res.end(message); } };
     if (req.method === 'GET' && req.url === '/healthz') return reply(200, 'ok\n');
     if (req.method !== 'POST' || req.url !== '/webhook') return reply(404, '');
     const readDeadline = setTimeout(() => { reply(408, 'webhook read timeout'); req.destroy(); }, readTimeout);
-    let ownsPublication = false;
     try {
       const declaredLength = Number(req.headers['content-length'] || 0);
       if (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > maximumBytes) return reply(413, 'payload too large');
@@ -42,20 +39,19 @@ export function createAdmissionServer(env = process.env, dependencies = {}) {
       const initial = evaluateWorkflowRun(payload, env.REPOSITORY, env.REPOSITORY_ID);
       if (!initial.eligible) return reply(202, 'untrusted or unrelated workflow');
       if (String(payload.installation?.id) !== env.INSTALLATION_ID) return reply(403, 'installation mismatch');
-      if (processing) return reply(503, 'redelivery required');
-      processing = true;
-      ownsPublication = true;
       const token = await getToken(env.APP_ID, privateKey, env.INSTALLATION_ID);
+      // GitHub's existing Check Run is durable pending custody. Each delivery owns
+      // its check ID; an earlier delayed completion cannot rewrite a newer check.
+      const pending = await reserveCheck(token, env.REPOSITORY, initial);
       // Success and failure deliveries both re-read the latest trusted evaluation.
       // A late success webhook cannot resurrect a superseded success.
       const verified = await verify(token, env.REPOSITORY, initial, env.REPOSITORY_ID);
-      await publish(token, env.REPOSITORY, verified);
+      await publish(token, env.REPOSITORY, { ...verified, checkId: pending.id });
       return reply(202, verified.admitted ? 'admitted' : 'rejected');
     } catch {
       return reply(503, 'admission incomplete; redelivery required');
     } finally {
       clearTimeout(readDeadline);
-      if (ownsPublication) processing = false;
     }
   });
 }

@@ -69,9 +69,12 @@ Deploy only an independently audited immutable commit and record the exact
 artifact. Disable branch-following deploys and automatic updates from `main`.
 The directory is not frozen by the current base policy. A change to it must not
 reach the credentialed deployment until a separately approved immutable release
-and its digest replace the prior deployment record. The deployment host must run
-one instance only: this implementation serializes publication inside that process
-and rejects concurrent deliveries with 503. It is not a distributed queue.
+and its digest replace the prior deployment record. Each authenticated delivery first creates an `in_progress` Check Run through the
+existing GitHub Checks API, then updates only that returned check ID. This is
+durable pending custody in GitHub; an older delayed completion cannot overwrite a
+newer delivery's check. No local queue or replacement ledger is introduced.
+Prove GitHub's actual newest-producer check and merge decisions with the concurrent
+failure and crash-recovery canaries before activation.
 
 Add `INSTALLATION_ID` to the required environment values. Pin it to the installation
 selected for this repository; do not install on all repositories. Permissions stay
@@ -81,12 +84,18 @@ The separate administrator credential needs repository Administration write to
 apply protection and Administration read for readback; it never enters this App.
 
 The service processes successful, failed, cancelled and pending trusted runs. It
-re-reads the latest exact-head run before publishing, including its current attempt
-and captured base SHA. Delayed success deliveries cannot deliberately replay an
+re-reads the latest exact-head run before publishing, including its current attempt. For success it additionally requires the exact
+run-attempt job, all five trusted policy steps executed successfully, and an
+unambiguous actual checkout command plus base/head environment pins from that
+job's logs. The log digest and job ID accompany the internal decision. Mutable
+`workflow_run.pull_requests` associations are never treated as immutable checkout
+provenance. Delayed success deliveries cannot deliberately replay an
 older attempt. Unrelated PR associations no longer mask the unique `main` PR.
-Incomplete history fails closed. Each API call is bounded to 1.5 seconds, intake
+Incomplete history fails closed. Each API call is bounded to one second, intake
 has a two-second absolute deadline, and errors return generic 503 responses.
-A 503 is **not accepted custody**. GitHub does not automatically redeliver failed
+A failure before the pending Check Run exists has no accepted custody. A failure
+after its creation leaves an actual pending check in GitHub, which must remain
+blocking and be recovered through authorized webhook redelivery. GitHub does not automatically redeliver failed
 webhooks: the installer must arrange authorized redelivery through the existing
 operational process, observe it, and prove failure-after-success revocation before
 activation. Do not invent a second scheduler or receipt ledger for this purpose.
@@ -134,7 +143,9 @@ activation. Do not invent a second scheduler or receipt ledger for this purpose.
 | Prior App success then same-head rerun fails/cancels | Latest App result becomes failure; prior success cannot satisfy merge. |
 | Older success delivery after newer failed run | Latest failure remains authoritative; merge stays blocked. |
 | Main advances after success | Strict current-base validation blocks until update and fresh admission. |
-| Webhook busy/timeout followed by authorized redelivery | 503 is recorded, delivery is retried, resulting failure/success is actually observed. |
+| Failure arrives while older success completes | The newer pending/failure Check Run remains authoritative after the old check ID is completed; merge stays blocked. |
+| Crash after pending Check Run creation | Actual pending custody blocks merge; authorized redelivery recovers the decision. |
+| Webhook/API failure before pending custody | Failure is observed and redelivered; no custody is invented. |
 
 Never submit an actual adversarial merge while effective enforcement is unknown.
 First obtain a definitive blocked decision with the trusted failure present. If a
