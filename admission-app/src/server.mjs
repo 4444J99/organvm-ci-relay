@@ -1,40 +1,65 @@
 import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { evaluateWorkflowRun, verifyWebhook } from './admission.mjs';
 import { installationToken, publishCheck, verifyCurrentPullRequest } from './github.mjs';
 
-const required = ['APP_ID', 'PRIVATE_KEY', 'WEBHOOK_SECRET', 'REPOSITORY', 'REPOSITORY_ID'];
-for (const key of required) if (!process.env[key]) throw new Error(`${key} is required`);
-const privateKey = process.env.PRIVATE_KEY.replaceAll('\\n', '\n');
-const MAX_WEBHOOK_BYTES = 1024 * 1024;
+export function createAdmissionServer(env = process.env, dependencies = {}) {
+  const required = ['APP_ID', 'PRIVATE_KEY', 'WEBHOOK_SECRET', 'REPOSITORY', 'REPOSITORY_ID', 'INSTALLATION_ID'];
+  for (const key of required) if (!env[key]) throw new Error(`${key} is required`);
+  for (const key of ['APP_ID', 'REPOSITORY_ID', 'INSTALLATION_ID']) {
+    if (!/^[1-9][0-9]*$/.test(env[key])) throw new Error(`${key} must be a positive integer`);
+  }
+  const privateKey = env.PRIVATE_KEY.replaceAll('\\n', '\n');
+  const getToken = dependencies.installationToken ?? installationToken;
+  const verify = dependencies.verifyCurrentPullRequest ?? verifyCurrentPullRequest;
+  const publish = dependencies.publishCheck ?? publishCheck;
+  const readTimeout = dependencies.readTimeout ?? 2000;
+  const maximumBytes = 1024 * 1024;
+  // One audited instance, one publication at a time. Busy deliveries are rejected
+  // explicitly; they are never acknowledged as if durable custody existed.
+  let processing = false;
+  return http.createServer({ requestTimeout: readTimeout, headersTimeout: readTimeout }, async (req, res) => {
+    const reply = (status, message) => { if (!res.headersSent && !res.destroyed) { res.writeHead(status); res.end(message); } };
+    if (req.method === 'GET' && req.url === '/healthz') return reply(200, 'ok\n');
+    if (req.method !== 'POST' || req.url !== '/webhook') return reply(404, '');
+    const readDeadline = setTimeout(() => { reply(408, 'webhook read timeout'); req.destroy(); }, readTimeout);
+    let ownsPublication = false;
+    try {
+      const declaredLength = Number(req.headers['content-length'] || 0);
+      if (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > maximumBytes) return reply(413, 'payload too large');
+      const chunks = [];
+      let received = 0;
+      for await (const chunk of req) {
+        received += chunk.length;
+        if (received > maximumBytes) return reply(413, 'payload too large');
+        chunks.push(chunk);
+      }
+      clearTimeout(readDeadline);
+      const raw = Buffer.concat(chunks);
+      if (!verifyWebhook(raw, req.headers['x-hub-signature-256'], env.WEBHOOK_SECRET)) return reply(401, 'invalid signature');
+      if (req.headers['x-github-event'] !== 'workflow_run') return reply(202, 'ignored');
+      const payload = JSON.parse(raw);
+      const initial = evaluateWorkflowRun(payload, env.REPOSITORY, env.REPOSITORY_ID);
+      if (!initial.eligible) return reply(202, 'untrusted or unrelated workflow');
+      if (String(payload.installation?.id) !== env.INSTALLATION_ID) return reply(403, 'installation mismatch');
+      if (processing) return reply(503, 'redelivery required');
+      processing = true;
+      ownsPublication = true;
+      const token = await getToken(env.APP_ID, privateKey, env.INSTALLATION_ID);
+      // Success and failure deliveries both re-read the latest trusted evaluation.
+      // A late success webhook cannot resurrect a superseded success.
+      const verified = await verify(token, env.REPOSITORY, initial, env.REPOSITORY_ID);
+      await publish(token, env.REPOSITORY, verified);
+      return reply(202, verified.admitted ? 'admitted' : 'rejected');
+    } catch {
+      return reply(503, 'admission incomplete; redelivery required');
+    } finally {
+      clearTimeout(readDeadline);
+      if (ownsPublication) processing = false;
+    }
+  });
+}
 
-http.createServer(async (req, res) => {
-  if (req.method === 'GET' && req.url === '/healthz') { res.writeHead(200); return res.end('ok\n'); }
-  if (req.method !== 'POST' || req.url !== '/webhook') { res.writeHead(404); return res.end(); }
-  req.setTimeout(10_000, () => req.destroy(new Error('webhook read timeout')));
-  const declaredLength = Number(req.headers['content-length'] || 0);
-  if (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > MAX_WEBHOOK_BYTES) {
-    res.writeHead(413); return res.end('payload too large');
-  }
-  const chunks = [];
-  let received = 0;
-  for await (const chunk of req) {
-    received += chunk.length;
-    if (received > MAX_WEBHOOK_BYTES) { res.writeHead(413); return res.end('payload too large'); }
-    chunks.push(chunk);
-  }
-  const raw = Buffer.concat(chunks);
-  if (!verifyWebhook(raw, req.headers['x-hub-signature-256'], process.env.WEBHOOK_SECRET)) { res.writeHead(401); return res.end('invalid signature'); }
-  if (req.headers['x-github-event'] !== 'workflow_run') { res.writeHead(202); return res.end('ignored'); }
-  try {
-    const payload = JSON.parse(raw);
-    const initial = evaluateWorkflowRun(payload, process.env.REPOSITORY);
-    if (!initial.admitted) { res.writeHead(202); return res.end(initial.reason); }
-    const token = await installationToken(process.env.APP_ID, privateKey, payload.installation.id);
-    const verified = await verifyCurrentPullRequest(token, process.env.REPOSITORY, initial);
-    await publishCheck(token, process.env.REPOSITORY, verified);
-    res.writeHead(202); res.end('admitted');
-  } catch (error) {
-    console.error(error);
-    res.writeHead(500); res.end('admission failed');
-  }
-}).listen(Number(process.env.PORT || 3000));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  createAdmissionServer().listen(Number(process.env.PORT || 3000));
+}

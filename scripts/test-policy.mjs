@@ -20,6 +20,20 @@ const fixtureRoots = [];
 let regressionCount = 0;
 let acceptanceCount = 0;
 let receiptRuntimeCount = 0;
+const verifierText = fs.readFileSync(path.join(sourceRoot, 'scripts/verify-policy.mjs'), 'utf8');
+const yamlDetector = verifierText.slice(verifierText.indexOf('const yamlStructureLine ='),
+  verifierText.indexOf('if (Object.values(workflows).some(hasExplicitYamlTag))'));
+for (const [source, expected] of [
+  ['run: echo http:!bad\n', false],
+  ['run: http:!bad\n', false],
+  ['probe: {"a":!!str b}\n', true],
+  ["probe: {'a':!!str b}\n", true],
+  ['probe:\n  - name: safe - |\n    run: !!str echo\n', true],
+  ['probe:\n  - |\n    run: !!str text inside a block scalar\n', false],
+]) {
+  assert.equal(runInNewContext(`${yamlDetector}\nhasExplicitYamlTag(source)`, { source }), expected,
+    `YAML boundary fixture: ${JSON.stringify(source)}`);
+}
 
 // Execute the trusted inline builder with synthetic environment values and a
 // narrow mocked fs surface. This is behavioral testing, not a security sandbox.
@@ -527,15 +541,23 @@ try {
     );
   }, /Explicit YAML tags are forbidden/u);
 
-  expectSelfRejected('document marker cannot hide an explicit tag', (root) => {
-    for (const workflowFile of [
+  for (const workflowFile of [
       '.github/workflows/relay-process-environment.yml',
       '.github/workflows/relay-policy.yml',
     ]) {
+    expectSelfRejected(`document marker cannot hide an explicit tag in ${workflowFile}`, (root) => {
       const file = path.join(root, workflowFile);
       fs.writeFileSync(file, `--- !!map\n${fs.readFileSync(file, 'utf8')}`);
-    }
-  }, /Explicit YAML tags are forbidden/u);
+    }, /Explicit YAML tags are forbidden/u);
+    expectSelfRejected(`inline hyphen scalar cannot hide a tag in ${workflowFile}`, (root) => {
+      const file = path.join(root, workflowFile);
+      fs.appendFileSync(file, '\nprobe:\n  - name: safe - |\n    run: !!str echo\n');
+    }, /Explicit YAML tags are forbidden/u);
+    expectSelfRejected(`JSON-style quoted key cannot hide a tag in ${workflowFile}`, (root) => {
+      const file = path.join(root, workflowFile);
+      fs.appendFileSync(file, '\nprobe: {"a":!!str b}\n');
+    }, /Explicit YAML tags are forbidden/u);
+  }
 
   expectRejected('workflow jobs cannot use self-hosted runners', (root) => {
     replaceInJob(

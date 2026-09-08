@@ -623,11 +623,13 @@ const hasExplicitYamlTag = (source) => {
       const trimmedPrefix = prefix.trimEnd();
       const preceding = trimmedPrefix.at(-1) ?? '';
       if (trimmedPrefix === '' || trimmedPrefix === '---' || '[{,?'.includes(preceding) ||
-          (preceding === '-' && trimmedPrefix.trimStart() === '-') || preceding === ':') {
+          (preceding === '-' && trimmedPrefix.trimStart() === '-') ||
+          (preceding === ':' && (/:\s+$/u.test(prefix) ||
+            /(?:^|[,{])\s*(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*')\s*:\s*$/u.test(line.slice(0, index))))) {
         return true;
       }
     }
-    if (/(?:^|:|-)\s*[>|][0-9+-]*\s*$/u.test(structure)) {
+    if (/^\s*(?:-\s+)?(?:[^:]+:\s+)?[>|][0-9+-]*\s*$/u.test(structure)) {
       blockScalarIndent = indentation;
     }
   }

@@ -11,18 +11,25 @@ export function verifyWebhook(rawBody, signature, secret) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-export function evaluateWorkflowRun(payload, expectedRepository) {
+export function evaluateWorkflowRun(payload, expectedRepository, expectedRepositoryId = process.env.REPOSITORY_ID) {
   const run = payload.workflow_run;
   const repo = payload.repository;
   if (!run || !repo) return { admitted: false, reason: 'missing workflow_run or repository' };
   if (repo.full_name !== expectedRepository) return { admitted: false, reason: 'repository name mismatch' };
-  if (String(repo.id) !== String(process.env.REPOSITORY_ID || repo.id)) return { admitted: false, reason: 'repository ID mismatch' };
+  if (!/^[1-9][0-9]*$/.test(String(expectedRepositoryId)) || String(repo.id) !== String(expectedRepositoryId)) return { admitted: false, reason: 'repository ID mismatch' };
   if (run.path !== TRUSTED_WORKFLOW_PATH) return { admitted: false, reason: 'untrusted workflow path' };
   if (run.event !== 'pull_request_target') return { admitted: false, reason: 'untrusted workflow event' };
-  if (run.status !== 'completed' || run.conclusion !== 'success') return { admitted: false, reason: 'trusted workflow did not succeed' };
   if (!/^[0-9a-f]{40}$/.test(run.head_sha || '')) return { admitted: false, reason: 'invalid candidate SHA' };
-  if (!Array.isArray(run.pull_requests) || run.pull_requests.length !== 1) return { admitted: false, reason: 'run must identify exactly one PR' };
-  return { admitted: true, headSha: run.head_sha, prNumber: run.pull_requests[0].number, runId: run.id, attempt: run.run_attempt || 1 };
+  if (!Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0) return { admitted: false, reason: 'invalid run identity' };
+  const matches = Array.isArray(run.pull_requests) ? run.pull_requests.filter(pr =>
+    pr.head?.sha === run.head_sha && pr.base?.ref === 'main' &&
+    String(pr.base?.repo?.id) === String(expectedRepositoryId) &&
+    Number.isSafeInteger(pr.number) && pr.number > 0) : [];
+  if (matches.length !== 1) return { admitted: false, reason: 'run must identify exactly one matching main PR' };
+  const admitted = run.status === 'completed' && run.conclusion === 'success';
+  return { eligible: true, admitted, reason: admitted ? undefined : 'trusted workflow did not succeed',
+    headSha: run.head_sha, baseSha: matches[0].base.sha, prNumber: matches[0].number,
+    runId: run.id, attempt: run.run_attempt };
 }
 
 export function checkRunBody(result, detailsUrl) {
