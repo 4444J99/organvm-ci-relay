@@ -159,7 +159,8 @@ const containsYamlReference = (source) => {
       visible += character;
     }
   }
-  const node = visible.trimStart();
+  // A document-start marker does not consume the root node's properties.
+  const node = visible.trimStart().replace(/^---(?:\s+|$)/u, '');
   return /^(?:-\s*)?[&*](?![&*])(?=\S)/u.test(node) ||
     /[{\[,:]\s*[&*](?![&*])(?=[^\s,[\]{}])/u.test(visible);
 };
@@ -570,16 +571,26 @@ const workflowModels = Object.fromEntries(
     buildWorkflowModel(source, file),
   ]),
 );
-const yamlStructureLine = (line) => {
-  let quote = null;
+const yamlStructureLine = (line, state = {}) => {
+  let quote = state.quote ?? null;
   let escaped = false;
   let result = '';
+  const colons = new Set();
+  const collections = state.collections ?? [];
+  let nodeStart = collections.length > 0 ? state.nodeStart : true;
+  let collectionEnd = collections.length > 0 ? state.collectionEnd : false;
+  let quotedEnd = collections.length > 0 ? state.quotedEnd : false;
+  let explicitKey = false;
   for (let index = 0; index < line.length; index += 1) {
     const character = line[index];
     if (quote === '"') {
       if (escaped) escaped = false;
       else if (character === '\\') escaped = true;
-      else if (character === '"') quote = null;
+      else if (character === '"') {
+        quote = null;
+        quotedEnd = true;
+        nodeStart = false;
+      }
       result += ' ';
       continue;
     }
@@ -588,23 +599,72 @@ const yamlStructureLine = (line) => {
         result += '  ';
         index += 1;
       } else {
-        if (character === "'") quote = null;
+        if (character === "'") {
+          quote = null;
+          quotedEnd = true;
+          nodeStart = false;
+        }
         result += ' ';
       }
       continue;
     }
-    if (character === '"' || character === "'") {
-      quote = character;
-      result += ' ';
+    if (/\s/u.test(character)) {
+      result += character;
       continue;
     }
     if (character === '#' && (index === 0 || /\s/u.test(line[index - 1]))) break;
+    // A quote in an existing plain scalar, including inline shell text,
+    // cannot introduce a YAML quoted scalar that spans following lines.
+    if ((character === '"' || character === "'") && nodeStart) {
+      quote = character;
+      nodeStart = false;
+      collectionEnd = false;
+      quotedEnd = false;
+      result += ' ';
+      continue;
+    }
     result += character;
+    // The reviewed workflow subset excludes explicit/ambiguous flow keys.
+    // Reject the introducing token before a multiline key can conceal a tag.
+    if (nodeStart && collections.length > 0 && character === '?') {
+      explicitKey = true;
+    }
+    // Brackets embedded in a block plain scalar (including inline shell)
+    // are text. Only a bracket at a YAML node start opens a collection.
+    if (nodeStart && '[{'.includes(character)) {
+      collections.push(character === '[' ? ']' : '}');
+      collectionEnd = false;
+      quotedEnd = false;
+      continue;
+    }
+    if (collections.length > 0 && character === collections.at(-1)) {
+      collections.pop();
+      nodeStart = false;
+      collectionEnd = true;
+      quotedEnd = false;
+      continue;
+    }
+    if (character === ':' && (collectionEnd || quotedEnd || nodeStart ||
+        /\s/u.test(line[index + 1] ?? '\n'))) {
+      // JSON-style collection/quoted keys need no space before the value.
+      // End-of-line also separates a key from a following nested value.
+      if (collectionEnd || quotedEnd) colons.add(index);
+      nodeStart = true;
+    } else {
+      nodeStart = (character === ',' && collections.length > 0) ||
+        (nodeStart && '-?'.includes(character) &&
+          /\s/u.test(line[index + 1] ?? '\n'));
+    }
+    collectionEnd = false;
+    quotedEnd = false;
   }
-  return result;
+  Object.assign(state, { quote, collections, nodeStart, collectionEnd, quotedEnd });
+  return { structure: result, colons, explicitKey };
 };
-const hasExplicitYamlTag = (source) => {
+const inspectYamlSyntax = (source) => {
   let blockScalarIndent = null;
+  let plainScalarIndent = null;
+  const syntaxState = {};
   for (const line of source.split('\n')) {
     const indentation = line.match(/^[ ]*/u)[0].length;
     if (blockScalarIndent !== null) {
@@ -612,25 +672,59 @@ const hasExplicitYamlTag = (source) => {
       if (indentation > blockScalarIndent) continue;
       blockScalarIndent = null;
     }
-    const structure = yamlStructureLine(line);
+    // An indented continuation of a block plain scalar is still text;
+    // a leading quote there cannot mask later sibling YAML properties.
+    if (plainScalarIndent !== null) {
+      if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
+      if (indentation > plainScalarIndent) continue;
+      plainScalarIndent = null;
+    }
+    const maskedLine = line
+      .replace(/\$\{\{.*?\}\}/gu, (expression) => ' '.repeat(expression.length));
+    const { structure, colons: collectionValueColons, explicitKey } =
+      yamlStructureLine(maskedLine, syntaxState);
+    if (explicitKey) return 'explicit-key';
     for (let index = structure.indexOf('!'); index >= 0;
       index = structure.indexOf('!', index + 1)) {
       const prefix = structure.slice(0, index);
       const trimmedPrefix = prefix.trimEnd();
       const preceding = trimmedPrefix.at(-1) ?? '';
-      if (trimmedPrefix === '' || '[{,?'.includes(preceding) ||
-          (preceding === '-' && trimmedPrefix.trimStart() === '-') || preceding === ':') {
-        return true;
+      if (trimmedPrefix === '' || /^---(?:\s+&[^\s,[\]{}]+)?$/u.test(trimmedPrefix) ||
+          '[{,?'.includes(preceding) ||
+          (preceding === '-' && /^(?:-\s+)*-$/u.test(trimmedPrefix.trimStart())) ||
+          (preceding === ':' && (/:\s+$/u.test(prefix) ||
+            collectionValueColons.has(trimmedPrefix.length - 1) ||
+            /(?:^|[,{])\s*(?:"(?:\\.|[^"\\])*"|'(?:''|[^'])*')\s*:\s*$/u.test(line.slice(0, index))))) {
+        return 'tag';
       }
     }
-    if (/(?:^|:)\s*[>|][0-9+-]*\s*$/u.test(structure)) {
-      blockScalarIndent = indentation;
+    const sequenceMarkers = line.slice(indentation).match(/^(?:-\s+)+/u)?.[0] ?? '';
+    const blockHeader = structure.slice(indentation + sequenceMarkers.length)
+      .match(/^(?:([^:]+):\s+)?[>|][0-9+-]*\s*$/u);
+    if (blockHeader) {
+      // A compact mapping belongs to the column after all sequence markers;
+      // a bare block scalar belongs to the innermost sequence marker itself.
+      blockScalarIndent = indentation + (blockHeader[1] !== undefined
+        ? sequenceMarkers.length : Math.max(0, sequenceMarkers.lastIndexOf('-')));
+    } else if (!syntaxState.quote && syntaxState.collections.length === 0 &&
+        !syntaxState.nodeStart && !syntaxState.quotedEnd && !syntaxState.collectionEnd &&
+        !/^(?:---|\.\.\.)\s*$/u.test(structure)) {
+      // A mapping's siblings begin after all compact sequence markers, while
+      // a bare plain scalar continues below its innermost sequence marker.
+      const mappingValue = /:\s/u.test(structure.slice(indentation + sequenceMarkers.length));
+      plainScalarIndent = indentation + (mappingValue
+        ? sequenceMarkers.length : Math.max(0, sequenceMarkers.lastIndexOf('-')));
     }
   }
-  return false;
+  return null;
 };
+const hasExplicitYamlTag = (source) => inspectYamlSyntax(source) === 'tag';
+const hasExplicitYamlMappingKey = (source) => inspectYamlSyntax(source) === 'explicit-key';
 if (Object.values(workflows).some(hasExplicitYamlTag)) {
   fail('Explicit YAML tags are forbidden in relay workflows');
+}
+if (Object.values(workflows).some(hasExplicitYamlMappingKey)) {
+  fail('Explicit or ambiguous YAML flow keys are not allowed in relay workflows');
 }
 const relayModel = workflowModels['relay-process-environment.yml'];
 const policyModel = workflowModels['relay-policy.yml'];
