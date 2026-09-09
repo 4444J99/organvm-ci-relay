@@ -159,7 +159,8 @@ const containsYamlReference = (source) => {
       visible += character;
     }
   }
-  const node = visible.trimStart();
+  // A document-start marker does not consume the root node's properties.
+  const node = visible.trimStart().replace(/^---(?:\s+|$)/u, '');
   return /^(?:-\s*)?[&*](?![&*])(?=\S)/u.test(node) ||
     /[{\[,:]\s*[&*](?![&*])(?=[^\s,[\]{}])/u.test(visible);
 };
@@ -688,7 +689,8 @@ const inspectYamlSyntax = (source) => {
       const prefix = structure.slice(0, index);
       const trimmedPrefix = prefix.trimEnd();
       const preceding = trimmedPrefix.at(-1) ?? '';
-      if (trimmedPrefix === '' || trimmedPrefix === '---' || '[{,?'.includes(preceding) ||
+      if (trimmedPrefix === '' || /^---(?:\s+&[^\s,[\]{}]+)?$/u.test(trimmedPrefix) ||
+          '[{,?'.includes(preceding) ||
           (preceding === '-' && /^(?:-\s+)*-$/u.test(trimmedPrefix.trimStart())) ||
           (preceding === ':' && (/:\s+$/u.test(prefix) ||
             collectionValueColons.has(trimmedPrefix.length - 1) ||
@@ -699,7 +701,8 @@ const inspectYamlSyntax = (source) => {
     if (/^\s*(?:-\s+)?(?:[^:]+:\s+)?[>|][0-9+-]*\s*$/u.test(structure)) {
       blockScalarIndent = indentation;
     } else if (!syntaxState.quote && syntaxState.collections.length === 0 &&
-        !syntaxState.nodeStart && !syntaxState.quotedEnd && !syntaxState.collectionEnd) {
+        !syntaxState.nodeStart && !syntaxState.quotedEnd && !syntaxState.collectionEnd &&
+        !/^(?:---|\.\.\.)\s*$/u.test(structure)) {
       // A block sequence marker shifts the actual mapping-key indentation.
       const sequenceMarker = line.slice(indentation).match(/^-\s+/u)?.[0].length ?? 0;
       plainScalarIndent = indentation + sequenceMarker;

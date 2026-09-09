@@ -57,6 +57,12 @@ for (const [source, expected] of [
   ['run: echo - - !!str literal\n', false],
   ['probe: \"- - !!str literal\"\n', false],
   ['probe:\n  - - |\n      !!str literal\n', false],
+  ['--- &root !!map\nname: example\n', true],
+  ['--- !!map &root\nname: example\n', true],
+  ['---\n  probe: !!str value\n', true],
+  ['...\n  probe: !!str value\n', true],
+  ['probe: "--- &root !!map"\n', false],
+  ['run: |\n  --- &root !!map\n', false],
 ]) {
   assert.equal(runInNewContext(`${yamlDetector}\nhasExplicitYamlTag(source)`, { source }), expected,
     `YAML boundary fixture: ${JSON.stringify(source)}`);
@@ -613,6 +619,18 @@ try {
       const file = path.join(root, workflowFile);
       fs.writeFileSync(file, `--- !!map\n${fs.readFileSync(file, 'utf8')}`);
     }, /Explicit YAML tags are forbidden/u);
+    for (const properties of ['&root !!map', '!!map &root', '&root', '*root']) {
+      expectSelfRejected(`document root ${properties} is rejected in ${workflowFile}`, (root) => {
+        const file = path.join(root, workflowFile);
+        fs.writeFileSync(file, `--- ${properties}\n${fs.readFileSync(file, 'utf8')}`);
+      }, /Explicit YAML tags are forbidden|YAML anchors, aliases, and merge keys are not allowed/u);
+    }
+    for (const marker of ['---', '...']) {
+      expectSelfRejected(`bare ${marker} cannot hide indented root tags in ${workflowFile}`, (root) => {
+        const file = path.join(root, workflowFile);
+        fs.writeFileSync(file, `${marker}\n  probe: !!str evil\n${fs.readFileSync(file, 'utf8')}`);
+      }, /Explicit YAML tags are forbidden/u);
+    }
     expectSelfRejected(`inline hyphen scalar cannot hide a tag in ${workflowFile}`, (root) => {
       const file = path.join(root, workflowFile);
       fs.appendFileSync(file, '\nprobe:\n  - name: safe - |\n    run: !!str echo\n');
@@ -636,7 +654,7 @@ try {
     for (const [index, fixture] of explicitFlowKeyFixtures.entries()) {
       expectSelfRejected(`unsupported explicit flow key ${index} in ${workflowFile}`, (root) => {
         fs.appendFileSync(path.join(root, workflowFile), `\nprobe: ${fixture}\n`);
-      }, /Explicit (?:or ambiguous YAML flow|YAML mapping) keys are not allowed/u);
+      }, /Explicit or ambiguous YAML flow keys are not allowed/u);
     }
     for (const value of ['- - !!str evil', '- - - !local evil', '-  - !<tag:yaml.org,2002:str> evil']) {
       expectSelfRejected(`nested block sequence tag ${value} in ${workflowFile}`, (root) => {
