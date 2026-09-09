@@ -698,14 +698,22 @@ const inspectYamlSyntax = (source) => {
         return 'tag';
       }
     }
-    if (/^\s*(?:-\s+)?(?:[^:]+:\s+)?[>|][0-9+-]*\s*$/u.test(structure)) {
-      blockScalarIndent = indentation;
+    const sequenceMarkers = line.slice(indentation).match(/^(?:-\s+)+/u)?.[0] ?? '';
+    const blockHeader = structure.slice(indentation + sequenceMarkers.length)
+      .match(/^(?:([^:]+):\s+)?[>|][0-9+-]*\s*$/u);
+    if (blockHeader) {
+      // A compact mapping belongs to the column after all sequence markers;
+      // a bare block scalar belongs to the innermost sequence marker itself.
+      blockScalarIndent = indentation + (blockHeader[1] !== undefined
+        ? sequenceMarkers.length : Math.max(0, sequenceMarkers.lastIndexOf('-')));
     } else if (!syntaxState.quote && syntaxState.collections.length === 0 &&
         !syntaxState.nodeStart && !syntaxState.quotedEnd && !syntaxState.collectionEnd &&
         !/^(?:---|\.\.\.)\s*$/u.test(structure)) {
-      // A block sequence marker shifts the actual mapping-key indentation.
-      const sequenceMarker = line.slice(indentation).match(/^-\s+/u)?.[0].length ?? 0;
-      plainScalarIndent = indentation + sequenceMarker;
+      // A mapping's siblings begin after all compact sequence markers, while
+      // a bare plain scalar continues below its innermost sequence marker.
+      const mappingValue = /:\s/u.test(structure.slice(indentation + sequenceMarkers.length));
+      plainScalarIndent = indentation + (mappingValue
+        ? sequenceMarkers.length : Math.max(0, sequenceMarkers.lastIndexOf('-')));
     }
   }
   return null;

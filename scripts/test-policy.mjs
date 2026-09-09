@@ -57,6 +57,18 @@ for (const [source, expected] of [
   ['run: echo - - !!str literal\n', false],
   ['probe: \"- - !!str literal\"\n', false],
   ['probe:\n  - - |\n      !!str literal\n', false],
+  ['probe:\n  - - name: safe\n      evil: !!str x\n', true],
+  ['probe:\n  - - - name: safe\n        evil: !local x\n', true],
+  ['probe:\n  -  - name: safe\n       evil: !<tag:yaml.org,2002:str> x\n', true],
+  ['probe:\n  - name: |\n      harmless\n    evil: !!str x\n', true],
+  ['probe:\n  - - name: |\n        harmless\n      evil: !!str x\n', true],
+  ['probe:\n  - - name: safe\n        !!str literal continuation\n', false],
+  ['probe:\n  - - safe\n      !!str literal continuation\n', false],
+  ['probe:\n  - - - safe\n        !!str literal continuation\n', false],
+  ['probe:\n  -  - safe\n       !!str literal continuation\n', false],
+  ['probe:\n  - - name: "!!str literal"\n', false],
+  ['probe:\n  - - name: |\n        !!str literal\n', false],
+  ['probe:\n  - - - >-\n        !!str literal\n', false],
   ['--- &root !!map\nname: example\n', true],
   ['--- !!map &root\nname: example\n', true],
   ['---\n  probe: !!str value\n', true],
@@ -658,6 +670,17 @@ try {
     }
     for (const value of ['- - !!str evil', '- - - !local evil', '-  - !<tag:yaml.org,2002:str> evil']) {
       expectSelfRejected(`nested block sequence tag ${value} in ${workflowFile}`, (root) => {
+        fs.appendFileSync(path.join(root, workflowFile), `\nprobe:\n  ${value}\n`);
+      }, /Explicit YAML tags are forbidden/u);
+    }
+    for (const value of [
+      '- - name: safe\n      evil: !!str x',
+      '- - - name: safe\n        evil: !local x',
+      '-  - name: safe\n       evil: !<tag:yaml.org,2002:str> x',
+      '- name: |\n      harmless\n    evil: !!str x',
+      '- - name: |\n        harmless\n      evil: !!str x',
+    ]) {
+      expectSelfRejected(`compact mapping cannot hide a sibling tag ${value} in ${workflowFile}`, (root) => {
         fs.appendFileSync(path.join(root, workflowFile), `\nprobe:\n  ${value}\n`);
       }, /Explicit YAML tags are forbidden/u);
     }
