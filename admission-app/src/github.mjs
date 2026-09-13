@@ -29,29 +29,39 @@ export async function installationToken(appId, privateKey, installationId) {
 }
 
 export async function verifyCurrentPullRequest(token, repository, result, repositoryId = process.env.REPOSITORY_ID) {
+  // GitHub caps filtered searches at 1,000 results. Enumerate this one workflow
+  // without search filters, then select the exact PR locally, failing closed on
+  // pagination drift rather than mistaking a truncated search for full history.
+  const historyPath = `/repos/${repository}/actions/workflows/relay-policy.yml/runs?per_page=100`;
   const [pr, main, runs] = await Promise.all([
     request(`/repos/${repository}/pulls/${result.prNumber}`, token),
     request(`/repos/${repository}/git/ref/heads/main`, token),
-    request(`/repos/${repository}/actions/workflows/relay-policy.yml/runs?event=pull_request_target&per_page=100`, token)
+    request(historyPath, token)
   ]);
   if (!Array.isArray(runs.workflow_runs) || !Number.isSafeInteger(runs.total_count) || runs.total_count < 0) throw new Error('workflow history is incomplete');
   const workflowRuns = [...runs.workflow_runs];
   for (let page = 2; workflowRuns.length < runs.total_count; page += 1) {
     if (page > 1000) throw new Error('workflow history exceeds pagination guard');
-    const next = await request(`/repos/${repository}/actions/workflows/relay-policy.yml/runs?event=pull_request_target&per_page=100&page=${page}`, token);
+    const next = await request(`${historyPath}&page=${page}`, token);
     if (!Array.isArray(next.workflow_runs) || next.total_count !== runs.total_count || !next.workflow_runs.length) throw new Error('workflow history is incomplete');
     workflowRuns.push(...next.workflow_runs);
   }
   if (workflowRuns.length !== runs.total_count) throw new Error('workflow history is incomplete');
+  if (workflowRuns.some(run => !Number.isSafeInteger(run.id) || run.id < 1) ||
+      new Set(workflowRuns.map(run => run.id)).size !== workflowRuns.length) throw new Error('workflow history contains invalid or duplicate identities');
   const matching = workflowRuns.filter(run =>
     run.path === TRUSTED_WORKFLOW_PATH && run.event === 'pull_request_target' &&
     run.pull_requests?.some(candidate => candidate.number === result.prNumber &&
       candidate.head?.sha === result.headSha && candidate.base?.sha === run.head_sha));
   if (matching.some(run => !Number.isSafeInteger(run.run_number) || run.run_number < 1 ||
-      !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1)) throw new Error('workflow ordering identity is invalid');
-  matching.sort((a, b) => b.run_number - a.run_number || b.run_attempt - a.run_attempt);
+      !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1 ||
+      typeof run.run_started_at !== 'string' || !Number.isFinite(Date.parse(run.run_started_at)))) throw new Error('workflow ordering identity is invalid');
+  matching.sort((a, b) => Date.parse(b.run_started_at) - Date.parse(a.run_started_at));
   if (!matching.length) throw new Error('trusted workflow run is absent');
+  if (matching.length > 1 && Date.parse(matching[0].run_started_at) === Date.parse(matching[1].run_started_at)) throw new Error('workflow attempt ordering is ambiguous');
   const run = await request(`/repos/${repository}/actions/runs/${matching[0].id}`, token);
+  if (run.id !== matching[0].id || run.run_attempt !== matching[0].run_attempt ||
+      run.run_started_at !== matching[0].run_started_at) throw new Error('workflow attempt changed during reconciliation');
   const current = evaluateWorkflowRun({ repository: run.repository, workflow_run: run }, repository, repositoryId);
   if (!current.eligible || current.prNumber !== result.prNumber) throw new Error('workflow identity mismatch');
   if (pr.state !== 'open') throw new Error('PR is not open');

@@ -8,7 +8,7 @@ const repository = { id: 1350979676, full_name: '4444J99/organvm-ci-relay' };
 const result = { eligible: true, admitted: true, headSha: sha, prNumber: 30, runId: 99, attempt: 1 };
 function fixture() {
   const pr = { number: 30, state: 'open', head: { sha }, base: { ref: 'main', sha: base, repo: structuredClone(repository) } };
-  const run = { id: 99, run_number: 9, run_attempt: 1, repository: structuredClone(repository), head_sha: base,
+  const run = { id: 99, run_number: 9, run_attempt: 1, run_started_at: '2026-09-13T12:00:00Z', repository: structuredClone(repository), head_sha: base,
     path: '.github/workflows/relay-policy.yml', event: 'pull_request_target', status: 'completed',
     conclusion: 'success', html_url: 'https://github.com/4444J99/organvm-ci-relay/actions/runs/99',
     pull_requests: [structuredClone(pr)] };
@@ -20,11 +20,16 @@ async function verify(data) {
     if (url.includes('/attempts/')) return { total_count: 1, jobs: [{ id: 500, name: 'Relay trust policy', conclusion: 'success', steps: ['Check out the trusted policy source', 'Fetch the exact pull-request head and freeze executable policy', 'Verify the candidate with the trusted base verifier', 'Verify every registered operational SHA exists', 'Regress the trusted base verifier'].map(name => ({ name, conclusion: 'success' })) }] };
     if (url.includes('/pulls/')) return data.pr;
     if (url.includes('/git/ref/')) return data.main;
-    if (url.includes('/actions/workflows/')) return {
-      total_count: data.total,
-      workflow_runs: url.includes('&page=') ? [] : [data.run],
-    };
-    return data.run;
+    if (url.includes('/actions/workflows/')) {
+      const query = new URL(url).searchParams;
+      for (const filter of ['actor', 'branch', 'check_suite_id', 'created', 'event', 'head_sha', 'status']) {
+        assert.equal(query.has(filter), false, `filtered search reintroduces the 1,000-result cap: ${filter}`);
+      }
+      const page = Number(query.get('page') ?? 1);
+      const runs = data.runs ?? [data.run];
+      return { total_count: data.total, workflow_runs: runs.slice((page - 1) * 100, page * 100) };
+    }
+    return data.fetchedRun ?? data.runs?.find(run => url.endsWith(`/runs/${run.id}`)) ?? data.run;
   } });
   try { return await verifyCurrentPullRequest('token', repository.full_name, result, repository.id); }
   finally { globalThis.fetch = previous; }
@@ -52,6 +57,34 @@ test('a later run supersedes an older webhook run ID', async () => {
 test('an in-progress rerun cannot retain success', async () => {
   const data = fixture(); data.run.status = 'in_progress'; data.run.conclusion = null;
   assert.equal((await verify(data)).admitted, false);
+});
+test('unfiltered workflow history can reach a matching run beyond result 1,000', async () => {
+  const data = fixture();
+  data.runs = Array.from({ length: 1000 }, (_, i) => ({ ...structuredClone(data.run), id: 1000 + i, event: 'push' }));
+  data.runs.push(data.run); data.total = data.runs.length;
+  assert.equal((await verify(data)).admitted, true);
+});
+for (const status of ['completed', 'in_progress']) {
+  test(`older run's newer attempt supersedes higher run number: ${status}`, async () => {
+    const data = fixture();
+    data.runs = [{ ...structuredClone(data.run), id: 100, run_number: 10 },
+      { ...data.run, run_attempt: 2, run_started_at: '2026-09-13T12:01:00Z', status, conclusion: status === 'completed' ? 'failure' : null }];
+    data.total = 2;
+    const out = await verify(data);
+    assert.equal(out.runId, 99); assert.equal(out.attempt, 2); assert.equal(out.admitted, false);
+  });
+}
+test('ambiguous attempt times cannot silently select success', async () => {
+  const data = fixture(); data.runs = [data.run, { ...structuredClone(data.run), id: 100, conclusion: 'failure' }]; data.total = 2;
+  await assert.rejects(verify(data), /ambiguous/);
+});
+test('duplicate history entries fail closed', async () => {
+  const data = fixture(); data.runs = [data.run, data.run]; data.total = 2;
+  await assert.rejects(verify(data), /duplicate/);
+});
+test('attempt changed between list and detail requires reconciliation again', async () => {
+  const data = fixture(); data.fetchedRun = { ...data.run, run_attempt: 2 };
+  await assert.rejects(verify(data), /changed during reconciliation/);
 });
 test('immutable checkout base is checked separately from mutable run association', async () => {
   const data = fixture(); data.checkoutBase = 'd'.repeat(40);

@@ -668,6 +668,18 @@ try {
         fs.appendFileSync(path.join(root, workflowFile), `\nprobe: ${fixture}\n`);
       }, /Explicit or ambiguous YAML flow keys are not allowed/u);
     }
+    for (const markers of ['- - ', '- - - ', '-  -  - ']) {
+      for (const value of ['&root safe', '*root', '<<: {}']) {
+        expectSelfRejected(`nested sequence reference ${markers}${value} in ${workflowFile}`, (root) => {
+          fs.appendFileSync(path.join(root, workflowFile), `\nprobe:\n  ${markers}${value}\n`);
+        }, /YAML anchors, aliases, and merge keys are not allowed/u);
+      }
+      for (const value of ['? key : value', ': value']) {
+        expectSelfRejected(`nested sequence explicit key ${markers}${value} in ${workflowFile}`, (root) => {
+          fs.appendFileSync(path.join(root, workflowFile), `\nprobe:\n  ${markers}${value}\n`);
+        }, /Explicit YAML mapping keys are not allowed/u);
+      }
+    }
     for (const value of ['- - !!str evil', '- - - !local evil', '-  - !<tag:yaml.org,2002:str> evil']) {
       expectSelfRejected(`nested block sequence tag ${value} in ${workflowFile}`, (root) => {
         fs.appendFileSync(path.join(root, workflowFile), `\nprobe:\n  ${value}\n`);

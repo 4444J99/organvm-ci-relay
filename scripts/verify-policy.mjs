@@ -161,7 +161,7 @@ const containsYamlReference = (source) => {
   }
   // A document-start marker does not consume the root node's properties.
   const node = visible.trimStart().replace(/^---(?:\s+|$)/u, '');
-  return /^(?:-\s*)?[&*](?![&*])(?=\S)/u.test(node) ||
+  return /^(?:-\s+)*[&*](?![&*])(?=\S)/u.test(node) ||
     /[{\[,:]\s*[&*](?![&*])(?=[^\s,[\]{}])/u.test(visible);
 };
 
@@ -183,10 +183,10 @@ const parseYamlEntries = (source, file) => {
     const uncommented = stripYamlComment(rawLine);
     let body = uncommented.slice(indent).trimEnd();
     if (body === '') continue;
-    if (/^(?:-\s*)?[?:](?:\s|$)/u.test(body)) {
+    if (/^(?:-\s+)*[?:](?:\s|$)/u.test(body)) {
       fail(`Explicit YAML mapping keys are not allowed: ${file}:${lineIndex + 1}`);
     }
-    if (/^\s*(?:-\s*)?<<\s*:/u.test(body) || containsYamlReference(body)) {
+    if (/^\s*(?:-\s+)*<<\s*:/u.test(body) || containsYamlReference(body)) {
       fail(`YAML anchors, aliases, and merge keys are not allowed: ${file}:${lineIndex + 1}`);
     }
     if (/^-\s*$/u.test(body)) {
