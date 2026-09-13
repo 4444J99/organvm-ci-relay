@@ -95,7 +95,7 @@
         "organvm-engine-v1"
       ],
       "regression_candidate": {
-        "sha": "f9aeb3f0bc4a329579dcffa2446d813fa8d84141",
+        "sha": "9daa8a93f36024eeb53199c20a29724109ea5c1d",
         "profile": "organvm-engine-v1"
       }
     },
