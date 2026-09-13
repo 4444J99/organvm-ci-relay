@@ -4,13 +4,14 @@ import crypto from 'node:crypto';
 import { CHECK_NAME, evaluateWorkflowRun, verifyWebhook } from '../src/admission.mjs';
 
 const sha = 'a'.repeat(40);
-const payload = { repository: { id: 1350979676, full_name: '4444J99/organvm-ci-relay' }, workflow_run: { id: 7, run_attempt: 1, path: '.github/workflows/relay-policy.yml', event: 'pull_request_target', status: 'completed', conclusion: 'success', head_sha: sha, pull_requests: [{ number: 29, head: { sha }, base: { ref: 'main', sha: 'b'.repeat(40), repo: { id: 1350979676 } } }] } };
+const base = 'b'.repeat(40);
+const payload = { repository: { id: 1350979676, full_name: '4444J99/organvm-ci-relay' }, workflow_run: { id: 7, run_attempt: 1, path: '.github/workflows/relay-policy.yml', event: 'pull_request_target', status: 'completed', conclusion: 'success', head_sha: base, pull_requests: [{ number: 29, head: { sha }, base: { ref: 'main', sha: base, repo: { id: 1350979676 } } }] } };
 
 test('admits only the trusted successful exact-head run', () => assert.equal(evaluateWorkflowRun(payload, payload.repository.full_name, 1350979676).admitted, true));
 for (const [name, mutate] of [
   ['forged workflow path', p => { p.workflow_run.path = '.github/workflows/forgery.yml'; }],
   ['duplicate or missing PR identity', p => { p.workflow_run.pull_requests.push({ ...structuredClone(p.workflow_run.pull_requests[0]), number: 30 }); }],
-  ['stale-shaped SHA', p => { p.workflow_run.head_sha = 'abc'; }],
+  ['stale-shaped SHA', p => { p.workflow_run.pull_requests[0].head.sha = 'abc'; }],
   ['failed result', p => { p.workflow_run.conclusion = 'failure'; }],
   ['wrong repository', p => { p.repository.full_name = 'attacker/fork'; }]
 ]) test(`rejects ${name}`, () => { const p = structuredClone(payload); mutate(p); assert.equal(evaluateWorkflowRun(p, payload.repository.full_name, 1350979676).admitted, false); });

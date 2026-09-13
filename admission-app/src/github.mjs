@@ -32,13 +32,14 @@ export async function verifyCurrentPullRequest(token, repository, result, reposi
   const [pr, main, runs] = await Promise.all([
     request(`/repos/${repository}/pulls/${result.prNumber}`, token),
     request(`/repos/${repository}/git/ref/heads/main`, token),
-    request(`/repos/${repository}/actions/workflows/relay-policy.yml/runs?event=pull_request_target&head_sha=${result.headSha}&per_page=100`, token)
+    request(`/repos/${repository}/actions/workflows/relay-policy.yml/runs?event=pull_request_target&per_page=100`, token)
   ]);
   if (!Array.isArray(runs.workflow_runs) || !Number.isSafeInteger(runs.total_count) ||
       runs.total_count !== runs.workflow_runs.length || runs.total_count > 100) throw new Error('workflow history is incomplete');
-  const matching = runs.workflow_runs.filter(run => run.head_sha === result.headSha &&
+  const matching = runs.workflow_runs.filter(run =>
     run.path === TRUSTED_WORKFLOW_PATH && run.event === 'pull_request_target' &&
-    run.pull_requests?.some(candidate => candidate.number === result.prNumber));
+    run.pull_requests?.some(candidate => candidate.number === result.prNumber &&
+      candidate.head?.sha === result.headSha && candidate.base?.sha === run.head_sha));
   if (matching.some(run => !Number.isSafeInteger(run.run_number) || run.run_number < 1 ||
       !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1)) throw new Error('workflow ordering identity is invalid');
   matching.sort((a, b) => b.run_number - a.run_number || b.run_attempt - a.run_attempt);
@@ -47,7 +48,7 @@ export async function verifyCurrentPullRequest(token, repository, result, reposi
   const current = evaluateWorkflowRun({ repository: run.repository, workflow_run: run }, repository, repositoryId);
   if (!current.eligible || current.prNumber !== result.prNumber) throw new Error('workflow identity mismatch');
   if (pr.state !== 'open') throw new Error('PR is not open');
-  if (pr.head.sha !== result.headSha || run.head_sha !== result.headSha) throw new Error('stale or mismatched candidate SHA');
+  if (pr.head.sha !== result.headSha || run.head_sha !== main.object.sha) throw new Error('stale or mismatched candidate/base SHA');
   if (pr.base.ref !== 'main' || pr.base.sha !== main.object.sha) throw new Error('candidate is not based on current main');
   if (!current.admitted) return { ...current, detailsUrl: run.html_url };
   // Run pull_requests associations are mutable; only the executed job's log is

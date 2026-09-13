@@ -8,7 +8,7 @@ const repository = { id: 1350979676, full_name: '4444J99/organvm-ci-relay' };
 const result = { eligible: true, admitted: true, headSha: sha, prNumber: 30, runId: 99, attempt: 1 };
 function fixture() {
   const pr = { number: 30, state: 'open', head: { sha }, base: { ref: 'main', sha: base, repo: structuredClone(repository) } };
-  const run = { id: 99, run_number: 9, run_attempt: 1, repository: structuredClone(repository), head_sha: sha,
+  const run = { id: 99, run_number: 9, run_attempt: 1, repository: structuredClone(repository), head_sha: base,
     path: '.github/workflows/relay-policy.yml', event: 'pull_request_target', status: 'completed',
     conclusion: 'success', html_url: 'https://github.com/4444J99/organvm-ci-relay/actions/runs/99',
     pull_requests: [structuredClone(pr)] };
@@ -31,7 +31,7 @@ test('revalidates current PR, base, latest run and repository', async () => {
 });
 for (const [name, mutate, diagnostic] of [
   ['stale candidate', d => { d.pr.head.sha = 'c'.repeat(40); }, /stale or mismatched/],
-  ['advanced main', d => { d.main.object.sha = 'c'.repeat(40); }, /not based/],
+  ['advanced main', d => { d.main.object.sha = 'c'.repeat(40); }, /stale or mismatched/],
   ['forged workflow', d => { d.run.path = 'forgery.yml'; }, /trusted workflow run is absent/],
   ['forged repository ID', d => { d.run.repository.id = 9; }, /workflow identity/],
   ['partial run history', d => { d.total = 101; }, /incomplete/]
@@ -56,7 +56,7 @@ test('immutable checkout base is checked separately from mutable run association
 });
 test('mutable run base does not substitute for actual trusted checkout', async () => {
   const data = fixture(); data.run.pull_requests[0].base.sha = 'd'.repeat(40);
-  assert.equal((await verify(data)).baseSha, base);
+  await assert.rejects(verify(data), /trusted workflow run is absent/);
 });
 
 function checkoutLog(baseSha, headSha) {

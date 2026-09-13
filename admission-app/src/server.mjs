@@ -43,6 +43,10 @@ export function createAdmissionServer(env = process.env, dependencies = {}) {
       // GitHub's existing Check Run is durable pending custody. Each delivery owns
       // its check ID; an earlier delayed completion cannot rewrite a newer check.
       const pending = await reserveCheck(token, env.REPOSITORY, initial);
+      // Requested/in-progress deliveries take custody from any same-head success
+      // as soon as GitHub announces the rerun. Completion is handled by its own
+      // delivery and receives a distinct check ID.
+      if (payload.workflow_run.status !== 'completed') return reply(202, 'pending');
       // Success and failure deliveries both re-read the latest trusted evaluation.
       // A late success webhook cannot resurrect a superseded success.
       const verified = await verify(token, env.REPOSITORY, initial, env.REPOSITORY_ID);
