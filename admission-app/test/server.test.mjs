@@ -81,9 +81,18 @@ test('verification failure retains its pending GitHub check instead of losing cu
 });
 test('requested rerun takes pending custody before completion', async () => {
   let reserved = 0;
-  await withServer({ installationToken: async () => 'token', startCheck: async () => ({ id: ++reserved }), verifyCurrentPullRequest: async () => assert.fail('pending run must not be verified'), publishCheck: async () => assert.fail('pending run must not be completed') }, async url => {
+  await withServer({ installationToken: async () => 'token', startCheck: async () => ({ id: ++reserved }), verifyCurrentPullRequest: async (_t, _r, result) => ({ ...result, status: 'in_progress' }), publishCheck: async () => assert.fail('pending run must not be completed') }, async url => {
     const response = await fetch(url, signed(body(null, 'requested')));
     assert.equal(response.status, 202); assert.equal(await response.text(), 'pending');
   });
   assert.equal(reserved, 1);
+});
+
+test('delayed requested delivery is completed from current GitHub state', async () => {
+  const published = [];
+  await withServer({ installationToken: async () => 'token', verifyCurrentPullRequest: async (_t, _r, result) => ({ ...result, status: 'completed', admitted: true }), publishCheck: async (_t, _r, result) => published.push(result) }, async url => {
+    const response = await fetch(url, signed(body(null, 'requested')));
+    assert.equal(response.status, 202); assert.equal(await response.text(), 'admitted');
+  });
+  assert.equal(published.length, 1);
 });

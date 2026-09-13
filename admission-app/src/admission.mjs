@@ -29,6 +29,7 @@ export function evaluateWorkflowRun(payload, expectedRepository, expectedReposit
   if (matches.length !== 1) return { admitted: false, reason: 'run must identify exactly one matching main PR' };
   const admitted = run.status === 'completed' && run.conclusion === 'success';
   return { eligible: true, admitted, reason: admitted ? undefined : 'trusted workflow did not succeed',
+    status: run.status,
     headSha: matches[0].head.sha, executionSha: run.head_sha,
     baseSha: matches[0].base.sha, prNumber: matches[0].number,
     runId: run.id, attempt: run.run_attempt };

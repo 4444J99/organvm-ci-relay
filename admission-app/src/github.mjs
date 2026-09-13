@@ -34,9 +34,16 @@ export async function verifyCurrentPullRequest(token, repository, result, reposi
     request(`/repos/${repository}/git/ref/heads/main`, token),
     request(`/repos/${repository}/actions/workflows/relay-policy.yml/runs?event=pull_request_target&per_page=100`, token)
   ]);
-  if (!Array.isArray(runs.workflow_runs) || !Number.isSafeInteger(runs.total_count) ||
-      runs.total_count !== runs.workflow_runs.length || runs.total_count > 100) throw new Error('workflow history is incomplete');
-  const matching = runs.workflow_runs.filter(run =>
+  if (!Array.isArray(runs.workflow_runs) || !Number.isSafeInteger(runs.total_count) || runs.total_count < 0) throw new Error('workflow history is incomplete');
+  const workflowRuns = [...runs.workflow_runs];
+  for (let page = 2; workflowRuns.length < runs.total_count; page += 1) {
+    if (page > 1000) throw new Error('workflow history exceeds pagination guard');
+    const next = await request(`/repos/${repository}/actions/workflows/relay-policy.yml/runs?event=pull_request_target&per_page=100&page=${page}`, token);
+    if (!Array.isArray(next.workflow_runs) || next.total_count !== runs.total_count || !next.workflow_runs.length) throw new Error('workflow history is incomplete');
+    workflowRuns.push(...next.workflow_runs);
+  }
+  if (workflowRuns.length !== runs.total_count) throw new Error('workflow history is incomplete');
+  const matching = workflowRuns.filter(run =>
     run.path === TRUSTED_WORKFLOW_PATH && run.event === 'pull_request_target' &&
     run.pull_requests?.some(candidate => candidate.number === result.prNumber &&
       candidate.head?.sha === result.headSha && candidate.base?.sha === run.head_sha));

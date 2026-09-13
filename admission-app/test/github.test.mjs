@@ -20,7 +20,10 @@ async function verify(data) {
     if (url.includes('/attempts/')) return { total_count: 1, jobs: [{ id: 500, name: 'Relay trust policy', conclusion: 'success', steps: ['Check out the trusted policy source', 'Fetch the exact pull-request head and freeze executable policy', 'Verify the candidate with the trusted base verifier', 'Verify every registered operational SHA exists', 'Regress the trusted base verifier'].map(name => ({ name, conclusion: 'success' })) }] };
     if (url.includes('/pulls/')) return data.pr;
     if (url.includes('/git/ref/')) return data.main;
-    if (url.includes('/actions/workflows/')) return { total_count: data.total, workflow_runs: [data.run] };
+    if (url.includes('/actions/workflows/')) return {
+      total_count: data.total,
+      workflow_runs: url.includes('&page=') ? [] : [data.run],
+    };
     return data.run;
   } });
   try { return await verifyCurrentPullRequest('token', repository.full_name, result, repository.id); }
