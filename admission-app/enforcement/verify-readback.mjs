@@ -6,6 +6,7 @@ assert.ok(filename && /^[1-9][0-9]*$/.test(id ?? '') && Number.isSafeInteger(app
 assert.notEqual(appId, 15368, 'GitHub Actions App ID 15368 is a shared producer; a dedicated admission App ID is required.');
 const value = JSON.parse(fs.readFileSync(filename, 'utf8'));
 assert.equal(value.required_status_checks?.strict, true);
+assert.deepEqual(value.required_status_checks.contexts, ['Relay admission / trusted']);
 assert.deepEqual(value.required_status_checks.checks, [{ context: 'Relay admission / trusted', app_id: appId }]);
 assert.equal(value.enforce_admins?.enabled, true);
 const reviews = value.required_pull_request_reviews;

@@ -83,6 +83,11 @@ test('readback accepts the complete enforced configuration', () => {
 });
 
 for (const [name, mutate] of [
+  ['unexpected legacy context', value => { value.required_status_checks.contexts.push('obsolete check'); }],
+  ['missing legacy projection', value => { delete value.required_status_checks.contexts; }],
+  ['empty legacy projection', value => { value.required_status_checks.contexts = []; }],
+  ['duplicate legacy projection', value => { value.required_status_checks.contexts.push('Relay admission / trusted'); }],
+  ['malformed legacy projection', value => { value.required_status_checks.contexts = 'Relay admission / trusted'; }],
   ['shared check producer', value => { value.required_status_checks.checks[0].app_id = 15368; }],
   ['wrong dedicated producer', value => { value.required_status_checks.checks[0].app_id = dedicatedAppId + 1; }],
   ['unbound producer', value => { delete value.required_status_checks.checks[0].app_id; }],
