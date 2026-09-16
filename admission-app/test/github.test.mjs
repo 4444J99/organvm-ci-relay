@@ -16,7 +16,7 @@ function fixture() {
 }
 async function verify(data) {
   const previous = globalThis.fetch;
-  globalThis.fetch = async url => ({ ok: true, status: 200, text: async () => checkoutLog(data.checkoutBase, data.checkoutHead), json: async () => {
+  globalThis.fetch = async url => ({ ok: true, status: 200, text: async () => checkoutLog(data.checkoutBases?.shift() ?? data.checkoutBase, data.checkoutHead), json: async () => {
     if (url.includes('/attempts/')) return { total_count: 1, jobs: [{ id: 500, name: 'Relay trust policy', conclusion: 'success', steps: ['Check out the trusted policy source', 'Fetch the exact pull-request head and freeze executable policy', 'Verify the candidate with the trusted base verifier', 'Verify every registered operational SHA exists', 'Regress the trusted base verifier'].map(name => ({ name, conclusion: 'success' })) }] };
     if (url.includes('/pulls/')) return data.pr;
     if (url.includes('/git/ref/')) return data.main;
@@ -79,9 +79,9 @@ for (const status of ['completed', 'in_progress']) {
     assert.equal(out.runId, 99); assert.equal(out.attempt, 2); assert.equal(out.admitted, false);
   });
 }
-test('ambiguous attempt times cannot silently select success', async () => {
+test('tied failed attempt cannot silently select success', async () => {
   const data = fixture(); data.runs = [data.run, { ...structuredClone(data.run), id: 100, conclusion: 'failure' }]; data.total = 2;
-  await assert.rejects(verify(data), /ambiguous/);
+  assert.equal((await verify(data)).admitted, false);
 });
 test('duplicate history entries fail closed', async () => {
   const data = fixture(); data.runs = [data.run, data.run]; data.total = 2;
@@ -120,4 +120,41 @@ test('completion updates its durable pending check instead of creating a late su
     assert.equal(calls[1].method, 'PATCH'); assert.ok(calls[1].url.endsWith('/check-runs/100'));
     await assert.rejects(publishCheck('token', repository.full_name, result), /durable pending check/);
   } finally { globalThis.fetch = previous; }
+});
+
+for (const reverse of [false, true]) {
+  test(`all tied attempts prove success regardless of history order: ${reverse}`, async () => {
+    const data = fixture();
+    data.runs = [data.run, { ...structuredClone(data.run), id: 100 }];
+    if (reverse) data.runs.reverse();
+    data.total = 2;
+    const out = await verify(data);
+    assert.equal(out.admitted, true);
+    assert.equal(out.runId, 100);
+    assert.deepEqual(out.corroboratingRuns.map(run => run.runId), [100, 99]);
+  });
+}
+for (const status of ['completed', 'in_progress']) {
+  test(`lower-ID tied rerun prevents higher-ID success: ${status}`, async () => {
+    const data = fixture();
+    data.runs = [{ ...structuredClone(data.run), id: 100 },
+      { ...data.run, run_attempt: 2, status, conclusion: status === 'completed' ? 'failure' : null }];
+    data.total = 2;
+    const out = await verify(data);
+    assert.equal(out.admitted, false);
+    assert.equal(out.runId, 99);
+    assert.equal(out.attempt, 2);
+  });
+}
+
+test('every tied success needs current-base checkout proof', async () => {
+  const data = fixture();
+  data.runs = [data.run, { ...structuredClone(data.run), id: 100 }];
+  data.total = 2;
+  data.checkoutBases = [base, 'd'.repeat(40)];
+  const out = await verify(data);
+  assert.equal(out.admitted, false);
+  assert.equal(out.runId, 99);
+  assert.match(out.reason, /checkout does not match/);
+  assert.equal(data.checkoutBases.length, 0);
 });

@@ -60,36 +60,47 @@ export async function verifyCurrentPullRequest(token, repository, result, reposi
       typeof run.run_started_at !== 'string' || !Number.isFinite(Date.parse(run.run_started_at)))) throw new Error('workflow ordering identity is invalid');
   matching.sort((a, b) => Date.parse(b.run_started_at) - Date.parse(a.run_started_at));
   if (!matching.length) throw new Error('trusted workflow run is absent');
-  if (matching.length > 1 && Date.parse(matching[0].run_started_at) === Date.parse(matching[1].run_started_at)) throw new Error('workflow attempt ordering is ambiguous');
-  const run = await request(`/repos/${repository}/actions/runs/${matching[0].id}`, token);
-  if (run.id !== matching[0].id || run.run_attempt !== matching[0].run_attempt ||
-      run.run_started_at !== matching[0].run_started_at) throw new Error('workflow attempt changed during reconciliation');
-  const current = evaluateWorkflowRun({ repository: run.repository, workflow_run: run }, repository, repositoryId);
-  if (!current.eligible || current.prNumber !== result.prNumber || current.headSha !== result.headSha) throw new Error('workflow identity mismatch');
-  if (pr.state !== 'open') throw new Error('PR is not open');
-  if (pr.head.sha !== result.headSha || run.head_sha !== result.headSha) throw new Error('stale or mismatched candidate/base SHA');
-  if (pr.base.ref !== 'main' || pr.base.sha !== main.object.sha) throw new Error('candidate is not based on current main');
-  if (!current.admitted) return { ...current, detailsUrl: run.html_url };
-  // Run pull_requests associations are mutable; only the executed job's log is
-  // evidence of what actions/checkout actually checked out for this evaluation.
-  const jobs = await request(`/repos/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`, token);
-  if (!Array.isArray(jobs.jobs) || jobs.total_count !== jobs.jobs.length || jobs.total_count > 100) throw new Error('workflow job history is incomplete');
-  const policies = jobs.jobs.filter(job => job.name === 'Relay trust policy');
-  if (policies.length !== 1 || policies[0].conclusion !== 'success') throw new Error('trusted policy job did not succeed');
-  const job = policies[0];
-  if (!Number.isSafeInteger(job.id) || job.id <= 0) throw new Error('trusted policy job identity is invalid');
-  for (const name of ['Check out the trusted policy source', 'Fetch the exact pull-request head and freeze executable policy',
-    'Verify the candidate with the trusted base verifier', 'Verify every registered operational SHA exists', 'Regress the trusted base verifier']) {
-    const steps = job.steps?.filter(step => step.name === name) ?? [];
-    if (steps.length !== 1 || steps[0].conclusion !== 'success') throw new Error('trusted policy step did not execute successfully');
+  // Equal-resolution start times do not establish which attempt is newer.
+  // Admit only if every tied attempt independently proves success at this tuple.
+  const latest = matching.filter(run => Date.parse(run.run_started_at) === Date.parse(matching[0].run_started_at));
+  latest.sort((a, b) => b.id - a.id); // Stable receipt identity, not temporal authority.
+  const accepted = [];
+  for (const selected of latest) {
+    const run = await request(`/repos/${repository}/actions/runs/${selected.id}`, token);
+    if (run.id !== selected.id || run.run_attempt !== selected.run_attempt ||
+        run.run_started_at !== selected.run_started_at) throw new Error('workflow attempt changed during reconciliation');
+    const current = evaluateWorkflowRun({ repository: run.repository, workflow_run: run }, repository, repositoryId);
+    if (!current.eligible || current.prNumber !== result.prNumber || current.headSha !== result.headSha) throw new Error('workflow identity mismatch');
+    if (pr.state !== 'open') throw new Error('PR is not open');
+    if (pr.head.sha !== result.headSha || run.head_sha !== result.headSha) throw new Error('stale or mismatched candidate/base SHA');
+    if (pr.base.ref !== 'main' || pr.base.sha !== main.object.sha) throw new Error('candidate is not based on current main');
+    if (!current.admitted) return { ...current, detailsUrl: run.html_url };
+    // Run pull_requests associations are mutable; only the executed job's log is
+    // evidence of what actions/checkout actually checked out for this evaluation.
+    const jobs = await request(`/repos/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`, token);
+    if (!Array.isArray(jobs.jobs) || jobs.total_count !== jobs.jobs.length || jobs.total_count > 100) throw new Error('workflow job history is incomplete');
+    const policies = jobs.jobs.filter(job => job.name === 'Relay trust policy');
+    if (policies.length !== 1 || policies[0].conclusion !== 'success') throw new Error('trusted policy job did not succeed');
+    const job = policies[0];
+    if (!Number.isSafeInteger(job.id) || job.id <= 0) throw new Error('trusted policy job identity is invalid');
+    for (const name of ['Check out the trusted policy source', 'Fetch the exact pull-request head and freeze executable policy',
+      'Verify the candidate with the trusted base verifier', 'Verify every registered operational SHA exists', 'Regress the trusted base verifier']) {
+      const steps = job.steps?.filter(step => step.name === name) ?? [];
+      if (steps.length !== 1 || steps[0].conclusion !== 'success') throw new Error('trusted policy step did not execute successfully');
+    }
+    const logs = await request(`/repos/${repository}/actions/jobs/${job.id}/logs`, token, {}, 'text');
+    const proof = parseTrustedCheckout(logs);
+    if (proof.baseSha !== main.object.sha || proof.headSha !== result.headSha) {
+      return { ...current, admitted: false, reason: 'trusted checkout does not match current base/head', detailsUrl: run.html_url };
+    }
+    accepted.push({ ...current, baseSha: proof.baseSha, checkoutJobId: job.id,
+      checkoutLogSha256: crypto.createHash('sha256').update(logs).digest('hex'), detailsUrl: run.html_url });
   }
-  const logs = await request(`/repos/${repository}/actions/jobs/${job.id}/logs`, token, {}, 'text');
-  const proof = parseTrustedCheckout(logs);
-  if (proof.baseSha !== main.object.sha || proof.headSha !== result.headSha) {
-    return { ...current, admitted: false, reason: 'trusted checkout does not match current base/head', detailsUrl: run.html_url };
-  }
-  return { ...current, baseSha: proof.baseSha, checkoutJobId: job.id,
-    checkoutLogSha256: crypto.createHash('sha256').update(logs).digest('hex'), detailsUrl: run.html_url };
+  return { ...accepted[0], corroboratingRuns: accepted.map(run => ({
+    runId: run.runId, attempt: run.attempt, checkoutJobId: run.checkoutJobId,
+    checkoutLogSha256: run.checkoutLogSha256,
+  })) };
+
 }
 
 export function parseTrustedCheckout(logs) {
