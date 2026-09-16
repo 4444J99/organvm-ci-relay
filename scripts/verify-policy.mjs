@@ -1955,6 +1955,31 @@ assertRuntimeSetupSteps(
   "matrix.node_version != ''",
 );
 
+// Install only the relay-owned media package before fetching candidate files.
+for (const [jobId, condition, fetchName] of [
+  ['python_dispatch', "needs.authorize.outputs.profile == 'alchemical-smoke-release-node22-v1'",
+    'Fetch trusted profile and target anonymously by exact SHA'],
+  ['python_regression', "matrix.profile == 'alchemical-smoke-release-node22-v1'",
+    'Re-authorize live identity and fetch both exact revisions'],
+]) {
+  const steps = extractSteps(relayModel, relayModel.jobs.get(jobId));
+  const matches = steps.filter((step) =>
+    directStepValue(step, 'name', 'media setup name') === 'Install relay-owned media dependencies');
+  if (matches.length !== 1) fail(`Execution job ${jobId} media setup is missing or duplicated`);
+  const step = matches[0];
+  const expected = new Map([
+    ['name', 'Install relay-owned media dependencies'], ['if', condition],
+    ['timeout-minutes', '5'], ['shell', 'bash'],
+    ['run', 'sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends ffmpeg'],
+  ]);
+  const fetchIndex = steps.findIndex((row) => directStepValue(row, 'name', 'fetch step') === fetchName);
+  if (step.directEntries.length !== expected.size ||
+      [...expected].some(([key, value]) => directStepValue(step, key, 'media setup') !== value) ||
+      fetchIndex < 0 || steps.indexOf(step) >= fetchIndex) {
+    fail(`Execution job ${jobId} media setup changed or runs after target fetch`);
+  }
+}
+
 let baseConfig;
 try {
   baseConfig = JSON.parse(

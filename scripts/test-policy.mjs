@@ -949,6 +949,21 @@ try {
     );
   }, /python_regression.*(?:Node|runtime)|(?:Node|runtime).*python_regression/iu);
 
+  for (const jobId of ['python_dispatch', 'python_regression']) {
+    const condition = jobId === 'python_dispatch'
+      ? "needs.authorize.outputs.profile == 'alchemical-smoke-release-node22-v1'"
+      : "matrix.profile == 'alchemical-smoke-release-node22-v1'";
+    for (const [label, from, to] of [
+      ['profile guard', `if: ${condition}`, 'if: always()'],
+      ['package allowlist', '--no-install-recommends ffmpeg', '--no-install-recommends arbitrary-package'],
+      ['failure propagation', 'timeout-minutes: 5', 'timeout-minutes: 5\n        continue-on-error: true'],
+    ]) {
+      expectRejected(`${jobId} media setup preserves ${label}`, (root) => {
+        replaceInJob(root, jobId, from, to);
+      }, /media setup/u);
+    }
+  }
+
   expectRejected('uppercase action SHA', (root) => {
     replace(
       root,
