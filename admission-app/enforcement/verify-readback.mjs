@@ -10,7 +10,7 @@ assert.deepEqual(value.required_status_checks.contexts, ['Relay admission / trus
 assert.deepEqual(value.required_status_checks.checks, [{ context: 'Relay admission / trusted', app_id: appId }]);
 assert.equal(value.enforce_admins?.enabled, true);
 const reviews = value.required_pull_request_reviews;
-assert.ok(reviews?.required_approving_review_count >= 1);
+assert.equal(reviews?.required_approving_review_count, 1);
 assert.equal(reviews.dismiss_stale_reviews, true);
 assert.equal(reviews.require_last_push_approval, true);
 assert.equal(reviews.require_code_owner_reviews, true);

@@ -101,6 +101,13 @@ for (const [name, mutate] of [
   ['review bypass for teams', value => { value.required_pull_request_reviews.bypass_pull_request_allowances.teams = [{ id: 20 }]; }],
   ['review bypass for apps', value => { value.required_pull_request_reviews.bypass_pull_request_allowances.apps = [{ id: 30 }]; }],
   ['no required independent approval', value => { value.required_pull_request_reviews.required_approving_review_count = 0; }],
+  ['additional required approvals', value => { value.required_pull_request_reviews.required_approving_review_count = 2; }],
+  ['negative review count', value => { value.required_pull_request_reviews.required_approving_review_count = -1; }],
+  ['fractional review count', value => { value.required_pull_request_reviews.required_approving_review_count = 1.5; }],
+  ['string review count', value => { value.required_pull_request_reviews.required_approving_review_count = '1'; }],
+  ['boolean review count', value => { value.required_pull_request_reviews.required_approving_review_count = true; }],
+  ['null review count', value => { value.required_pull_request_reviews.required_approving_review_count = null; }],
+  ['missing review count', value => { delete value.required_pull_request_reviews.required_approving_review_count; }],
   ['stale reviews retained', value => { value.required_pull_request_reviews.dismiss_stale_reviews = false; }],
   ['last-push approval waived', value => { value.required_pull_request_reviews.require_last_push_approval = false; }],
 ]) {
