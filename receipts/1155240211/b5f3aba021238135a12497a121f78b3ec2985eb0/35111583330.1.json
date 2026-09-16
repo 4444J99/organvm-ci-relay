@@ -1,0 +1,61 @@
+{
+  "schema": "organvm-ci-relay-receipt/v3",
+  "evidence_origin": "personal-account-relay-execution",
+  "target": {
+    "stable_repository_id": "1155240211",
+    "repository": "organvm/learning-resources",
+    "sha": "b5f3aba021238135a12497a121f78b3ec2985eb0",
+    "profile": "python-ruff-pytest-v1",
+    "profile_family": "python",
+    "runtime": {
+      "python_versions": [
+        "3.11.16",
+        "3.12.14"
+      ],
+      "node_version": null
+    }
+  },
+  "relay": {
+    "repository": "4444J99/organvm-ci-relay",
+    "workflow_sha": "b53a47f93ef861044eb5a3b888a4fc72801dc4cf",
+    "workflow_ref": "4444J99/organvm-ci-relay/.github/workflows/relay-process-environment.yml@refs/heads/main",
+    "event_sha": "b53a47f93ef861044eb5a3b888a4fc72801dc4cf",
+    "defining_workflow": {
+      "repository": "4444J99/organvm-ci-relay",
+      "file_path": ".github/workflows/relay-process-environment.yml",
+      "ref": "4444J99/organvm-ci-relay/.github/workflows/relay-process-environment.yml@refs/heads/main",
+      "sha": "b53a47f93ef861044eb5a3b888a4fc72801dc4cf"
+    },
+    "run_id": "35111583330",
+    "run_attempt": "1",
+    "run_url": "https://github.com/4444J99/organvm-ci-relay/actions/runs/35111583330"
+  },
+  "dispatch": {
+    "actor": "4444J99",
+    "declared_lead_provider": "codex"
+  },
+  "trusted_job_results": {
+    "posix_matrix": "skipped",
+    "windows": "skipped",
+    "python_matrix": "failure",
+    "regression_preparation": "skipped",
+    "python_regression_matrix": "skipped",
+    "exact_regression_matrix": null
+  },
+  "source_checkout_verified": null,
+  "tests_and_assertions_executed": null,
+  "aggregate": "error",
+  "aggregate_scope": "target-execution-and-required-regressions",
+  "publication": {
+    "durable_ledger": "not-yet-observed",
+    "artifact_upload": "not-yet-observed",
+    "observation_time": "receipt-generation",
+    "verification": "Verify publication steps and the immutable ledger commit externally."
+  },
+  "reproducibility": {
+    "source_revisions": "exact-sha",
+    "dependency_environment": "networked-profile-defined-non-hermetic"
+  },
+  "generated_at": "2026-09-16T14:53:45.435Z",
+  "observations": "Untrusted artifacts are not inputs to this receipt."
+}
