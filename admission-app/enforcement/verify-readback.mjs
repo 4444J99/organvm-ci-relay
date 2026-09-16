@@ -16,5 +16,5 @@ assert.equal(reviews.require_last_push_approval, true);
 assert.equal(reviews.require_code_owner_reviews, true);
 assert.ok(!reviews.bypass_pull_request_allowances || Object.values(reviews.bypass_pull_request_allowances).every(list => Array.isArray(list) && list.length === 0));
 for (const key of ['required_conversation_resolution', 'required_linear_history']) assert.equal(value[key]?.enabled, true, key);
-for (const key of ['allow_force_pushes', 'allow_deletions']) assert.equal(value[key]?.enabled, false, key);
+for (const key of ['allow_force_pushes', 'allow_deletions', 'lock_branch']) assert.equal(value[key]?.enabled, false, key);
 console.log('Branch-protection readback matches expected controls. Effective inherited rules and merge decisions still require inspection.');

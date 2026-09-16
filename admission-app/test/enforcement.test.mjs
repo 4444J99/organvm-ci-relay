@@ -33,6 +33,7 @@ function fixture() {
     required_linear_history: { enabled: true },
     allow_force_pushes: { enabled: false },
     allow_deletions: { enabled: false },
+    lock_branch: { enabled: false },
   };
 }
 
@@ -83,6 +84,9 @@ test('readback accepts the complete enforced configuration', () => {
 });
 
 for (const [name, mutate] of [
+  ['locked branch', value => { value.lock_branch.enabled = true; }],
+  ['missing lock state', value => { delete value.lock_branch; }],
+  ['malformed lock state', value => { value.lock_branch.enabled = 'false'; }],
   ['unexpected legacy context', value => { value.required_status_checks.contexts.push('obsolete check'); }],
   ['missing legacy projection', value => { delete value.required_status_checks.contexts; }],
   ['empty legacy projection', value => { value.required_status_checks.contexts = []; }],
