@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import { createAdmissionServer } from '../src/server.mjs';
 const env = { APP_ID: '1', PRIVATE_KEY: 'test-key', WEBHOOK_SECRET: 'test-secret', REPOSITORY: '4444J99/organvm-ci-relay', REPOSITORY_ID: '1350979676', INSTALLATION_ID: '7' };
 const sha = 'a'.repeat(40);
-function body(conclusion = 'failure', status = 'completed') { const base = 'b'.repeat(40); return JSON.stringify({ installation: { id: 7 }, repository: { id: 1350979676, full_name: env.REPOSITORY }, workflow_run: { id: 9, run_attempt: 2, head_sha: base, path: '.github/workflows/relay-policy.yml', event: 'pull_request_target', status, conclusion, pull_requests: [{ number: 30, head: { sha }, base: { ref: 'main', sha: base, repo: { id: 1350979676 } } }] } }); }
+function body(conclusion = 'failure', status = 'completed') { const base = 'b'.repeat(40); return JSON.stringify({ installation: { id: 7 }, repository: { id: 1350979676, full_name: env.REPOSITORY }, workflow_run: { id: 9, run_attempt: 2, head_sha: sha, path: '.github/workflows/relay-policy.yml', event: 'pull_request_target', status, conclusion, pull_requests: [{ number: 30, head: { sha }, base: { ref: 'main', sha: base, repo: { id: 1350979676 } } }] } }); }
 async function withServer(dependencies, fn) {
   const server = createAdmissionServer(env, { startCheck: async () => ({ id: 1 }), ...dependencies });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');

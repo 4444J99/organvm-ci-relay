@@ -23,7 +23,7 @@ export function evaluateWorkflowRun(payload, expectedRepository, expectedReposit
   if (!Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0) return { admitted: false, reason: 'invalid run identity' };
   const matches = Array.isArray(run.pull_requests) ? run.pull_requests.filter(pr =>
     /^[0-9a-f]{40}$/.test(pr.head?.sha || '') && /^[0-9a-f]{40}$/.test(pr.base?.sha || '') &&
-    pr.base.sha === run.head_sha && pr.base?.ref === 'main' &&
+    pr.head.sha === run.head_sha && pr.base?.ref === 'main' &&
     String(pr.base?.repo?.id) === String(expectedRepositoryId) &&
     Number.isSafeInteger(pr.number) && pr.number > 0) : [];
   if (matches.length !== 1) return { admitted: false, reason: 'run must identify exactly one matching main PR' };

@@ -29,19 +29,21 @@ export async function installationToken(appId, privateKey, installationId) {
 }
 
 export async function verifyCurrentPullRequest(token, repository, result, repositoryId = process.env.REPOSITORY_ID) {
-  // GitHub caps filtered searches at 1,000 results. Enumerate this one workflow
-  // without search filters, then select the exact PR locally, failing closed on
-  // pagination drift rather than mistaking a truncated search for full history.
-  const historyPath = `/repos/${repository}/actions/workflows/relay-policy.yml/runs?per_page=100`;
+  // Scope history to the immutable candidate identity. GitHub caps filtered
+  // searches at 1,000 results; reject saturation explicitly rather than silently
+  // treating a truncated result as complete. Unrelated lifetime history is absent.
+  if (!/^[0-9a-f]{40}$/.test(result.headSha)) throw new Error('invalid candidate SHA');
+  const historyPath = `/repos/${repository}/actions/workflows/relay-policy.yml/runs?per_page=100&event=pull_request_target&head_sha=${result.headSha}`;
   const [pr, main, runs] = await Promise.all([
     request(`/repos/${repository}/pulls/${result.prNumber}`, token),
     request(`/repos/${repository}/git/ref/heads/main`, token),
     request(historyPath, token)
   ]);
   if (!Array.isArray(runs.workflow_runs) || !Number.isSafeInteger(runs.total_count) || runs.total_count < 0) throw new Error('workflow history is incomplete');
+  if (runs.total_count >= 1000) throw new Error('candidate workflow history reaches filtered search limit');
   const workflowRuns = [...runs.workflow_runs];
   for (let page = 2; workflowRuns.length < runs.total_count; page += 1) {
-    if (page > 1000) throw new Error('workflow history exceeds pagination guard');
+    if (page > 10) throw new Error('workflow history exceeds pagination guard');
     const next = await request(`${historyPath}&page=${page}`, token);
     if (!Array.isArray(next.workflow_runs) || next.total_count !== runs.total_count || !next.workflow_runs.length) throw new Error('workflow history is incomplete');
     workflowRuns.push(...next.workflow_runs);
@@ -50,9 +52,9 @@ export async function verifyCurrentPullRequest(token, repository, result, reposi
   if (workflowRuns.some(run => !Number.isSafeInteger(run.id) || run.id < 1) ||
       new Set(workflowRuns.map(run => run.id)).size !== workflowRuns.length) throw new Error('workflow history contains invalid or duplicate identities');
   const matching = workflowRuns.filter(run =>
-    run.path === TRUSTED_WORKFLOW_PATH && run.event === 'pull_request_target' &&
+    run.path === TRUSTED_WORKFLOW_PATH && run.event === 'pull_request_target' && run.head_sha === result.headSha &&
     run.pull_requests?.some(candidate => candidate.number === result.prNumber &&
-      candidate.head?.sha === result.headSha && candidate.base?.sha === run.head_sha));
+      candidate.head?.sha === result.headSha));
   if (matching.some(run => !Number.isSafeInteger(run.run_number) || run.run_number < 1 ||
       !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1 ||
       typeof run.run_started_at !== 'string' || !Number.isFinite(Date.parse(run.run_started_at)))) throw new Error('workflow ordering identity is invalid');
@@ -63,9 +65,9 @@ export async function verifyCurrentPullRequest(token, repository, result, reposi
   if (run.id !== matching[0].id || run.run_attempt !== matching[0].run_attempt ||
       run.run_started_at !== matching[0].run_started_at) throw new Error('workflow attempt changed during reconciliation');
   const current = evaluateWorkflowRun({ repository: run.repository, workflow_run: run }, repository, repositoryId);
-  if (!current.eligible || current.prNumber !== result.prNumber) throw new Error('workflow identity mismatch');
+  if (!current.eligible || current.prNumber !== result.prNumber || current.headSha !== result.headSha) throw new Error('workflow identity mismatch');
   if (pr.state !== 'open') throw new Error('PR is not open');
-  if (pr.head.sha !== result.headSha || run.head_sha !== main.object.sha) throw new Error('stale or mismatched candidate/base SHA');
+  if (pr.head.sha !== result.headSha || run.head_sha !== result.headSha) throw new Error('stale or mismatched candidate/base SHA');
   if (pr.base.ref !== 'main' || pr.base.sha !== main.object.sha) throw new Error('candidate is not based on current main');
   if (!current.admitted) return { ...current, detailsUrl: run.html_url };
   // Run pull_requests associations are mutable; only the executed job's log is
