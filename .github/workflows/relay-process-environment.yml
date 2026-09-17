@@ -506,6 +506,12 @@ jobs:
           check-latest: false
           package-manager-cache: false
 
+      - name: Install relay-owned media dependencies
+        if: needs.authorize.outputs.profile == 'alchemical-smoke-release-node22-v1'
+        timeout-minutes: 5
+        shell: bash
+        run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Fetch trusted profile and target anonymously by exact SHA
         shell: bash
         run: |
@@ -560,6 +566,12 @@ jobs:
           node-version: ${{ matrix.node_version }}
           check-latest: false
           package-manager-cache: false
+
+      - name: Install relay-owned media dependencies
+        if: matrix.profile == 'alchemical-smoke-release-node22-v1'
+        timeout-minutes: 5
+        shell: bash
+        run: sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Re-authorize live identity and fetch both exact revisions
         shell: bash
