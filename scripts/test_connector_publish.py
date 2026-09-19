@@ -223,6 +223,31 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(self.prepare(["change.txt"], p["local_commit_sha"])
                          ["expected_tree_sha"], p["expected_tree_sha"])
 
+    def test_git_inspection_does_not_run_fsmonitor(self):
+        marker = self.root / ".git" / "fsmonitor-invoked"
+        monitor = self.root / ".git" / "fsmonitor-test"
+        monitor.write_text("#!/bin/sh\nprintf invoked > '" + str(marker) + "'\nprintf 'token\\0'\n")
+        monitor.chmod(0o755)
+        self.git("config", "core.fsmonitor", str(monitor))
+        bridge.git(self.root, "status", "--porcelain=v1")
+        self.assertFalse(marker.exists())
+
+    def test_missing_partial_clone_blob_is_not_fetched(self):
+        self.git("config", "uploadpack.allowFilter", "true")
+        blob = self.git("rev-parse", self.base + ":change.txt")
+        with tempfile.TemporaryDirectory() as temp:
+            clone = Path(temp) / "clone"
+            subprocess.run(["git", "clone", "--quiet", "--no-checkout", "--filter=blob:none",
+                            self.root.as_uri(), str(clone)], check=True, capture_output=True)
+            absent = subprocess.run(["git", "--no-lazy-fetch", "-C", str(clone),
+                                     "cat-file", "-e", blob], capture_output=True)
+            self.assertNotEqual(absent.returncode, 0)
+            with self.assertRaises(bridge.Refused):
+                bridge.git(clone, "cat-file", "-e", blob)
+            still_absent = subprocess.run(["git", "--no-lazy-fetch", "-C", str(clone),
+                                           "cat-file", "-e", blob], capture_output=True)
+            self.assertNotEqual(still_absent.returncode, 0)
+
     def test_valid_readbacks_produce_only_nonforced_update(self):
         p = self.normal()
         repo, pr, branch, tree, commit = self.readbacks(p)

@@ -20,7 +20,8 @@ class Refused(ValueError):
 
 def git(root: Path, *args: str) -> bytes:
     result = subprocess.run(
-        ["git", "--no-replace-objects", "-C", str(root), *args],
+        ["git", "--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
+         "-c", "core.fsmonitor=false", "-C", str(root), *args],
         check=False, capture_output=True, timeout=30,
     )
     if result.returncode:

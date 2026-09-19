@@ -73,7 +73,13 @@ not weaker verification. A large changed-file count alone is not a blocker:
 the 367-file regression reuses 365 remote-parent blobs and transmits only the
 two local resolutions. No single connector request size is guaranteed.
 
-Tests require Python 3.10+ and Git, no third-party packages or network:
+Git inspection disables replacement objects, lazy promisor fetches, optional
+index locks and configured filesystem-monitor hooks. Missing local objects must
+be hydrated through the approved source-read path before preparation; the helper
+does not silently fetch them. Tests include an actual partial clone and a local
+filesystem-monitor sentinel to verify these refusal boundaries.
+
+Tests require Python 3.10+ and Git 2.47+, no third-party packages or network:
 
 ```sh
 python -m unittest discover -s scripts -p 'test_connector_publish.py' -v
