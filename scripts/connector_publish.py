@@ -98,18 +98,21 @@ def prepare(root: Path, repository: str, repository_id: int, branch: str,
                    for value in entries(root, parent).values() if value[1] == "blob"}
     elements = []
     for path in sorted(changed):
+        for entry in (old.get(path), new.get(path)):
+            if entry is not None and (entry[1] != "blob" or entry[0] not in {"100644", "100755"}):
+                raise Refused("Changed symlink/submodule requires a separately reviewed transport")
         mode, kind, sha = new.get(path, old.get(path))
         element: dict[str, Any] = {"path": path, "mode": mode, "type": kind}
         if path not in new:
             element["sha"] = None
-        elif kind != "blob" or mode not in {"100644", "100755"}:
-            raise Refused("Changed symlink/submodule requires a separately reviewed transport")
         elif sha in known_blobs:
             element["sha"] = sha
         else:
             if int(git(root, "cat-file", "-s", sha)) > max_bytes:
                 raise Refused("Blob exceeds connector payload budget")
             blob = git(root, "cat-file", "blob", sha)
+            if b"\0" in blob:
+                raise Refused("New NUL-containing blob requires a binary-capable transport")
             try:
                 element["content"] = blob.decode("utf-8")
             except UnicodeDecodeError as exc:

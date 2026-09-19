@@ -166,6 +166,35 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaises(bridge.Refused):
             self.prepare(["link"])
 
+    def test_nul_binary_fails_closed(self):
+        self.write("binary", b"text\x00binary")
+        self.commit()
+        with self.assertRaises(bridge.Refused):
+            self.prepare(["binary"])
+
+    def test_deleting_or_replacing_symlink_fails_closed(self):
+        original_base = self.base
+        for replacement in (None, b"regular file\n"):
+            with self.subTest(replacement=replacement):
+                self.git("reset", "--hard", original_base)
+                (self.root / "link").symlink_to("keep.txt")
+                self.base = self.commit()
+                (self.root / "link").unlink()
+                if replacement is not None:
+                    self.write("link", replacement)
+                self.commit()
+                with self.assertRaises(bridge.Refused):
+                    self.prepare(["link"])
+
+    def test_deleting_submodule_fails_closed(self):
+        self.git("update-index", "--add", "--cacheinfo", "160000", self.base, "module")
+        self.git("commit", "-qm", "gitlink baseline")
+        self.base = self.git("rev-parse", "HEAD")
+        self.git("update-index", "--force-remove", "--", "module")
+        self.git("commit", "-qm", "delete gitlink")
+        with self.assertRaises(bridge.Refused):
+            self.prepare(["module"])
+
     def test_file_directory_transition_fails_closed(self):
         (self.root / "change.txt").unlink()
         self.write("change.txt/inside", b"new")
