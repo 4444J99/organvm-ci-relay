@@ -123,3 +123,22 @@ for (const [name, mutate] of [
     assert.match(result.stderr, /AssertionError/);
   });
 }
+
+for (const allowances of [false, true, 0, 1, -1, '', [], [[]], { unknown: [] }]) {
+  test(`readback rejects malformed review-bypass container ${JSON.stringify(allowances)}`, () => {
+    const value = fixture();
+    value.required_pull_request_reviews.bypass_pull_request_allowances = allowances;
+    const result = verify(value);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /AssertionError/);
+  });
+}
+
+for (const allowances of [undefined, null, {}, { users: [] }, { teams: [], apps: [] }]) {
+  test(`readback preserves empty optional review-bypass shape ${JSON.stringify(allowances)}`, () => {
+    const value = fixture();
+    value.required_pull_request_reviews.bypass_pull_request_allowances = allowances;
+    const result = verify(value);
+    assert.equal(result.status, 0, result.stderr);
+  });
+}
