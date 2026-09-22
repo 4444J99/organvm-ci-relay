@@ -106,7 +106,7 @@
         "python-pytest-test-v1"
       ],
       "regression_candidate": {
-        "sha": "faf6c5f67130925518233f5f99a76182b544fb85",
+        "sha": "711643b0adc03e78559ed73ed9b9229a084c8488",
         "profile": "python-pytest-test-v1"
       }
     },
