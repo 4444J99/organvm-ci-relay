@@ -82,7 +82,7 @@ filesystem-monitor sentinel to verify these refusal boundaries.
 Tests require Python 3.10+ and Git 2.47+, no third-party packages or network:
 
 ```sh
-python -m unittest discover -s scripts -p 'test_connector_publish.py' -v
+python -m unittest discover -s scripts -p 'test_connector_publish*.py' -v
 ```
 
 API contracts:
