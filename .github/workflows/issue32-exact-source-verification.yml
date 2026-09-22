@@ -17,7 +17,7 @@ concurrency:
 jobs:
   source-tests:
     name: "Diagnostic source suite / ${{ matrix.suite }}"
-    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push'
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && !contains(github.event.head_commit.message, '[laurea-only]')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions: {}
@@ -127,3 +127,101 @@ jobs:
           git diff --exit-code
           git diff --cached --exit-code
           printf 'Source suite completed for %s (%s). This is not activation or merge approval.\n' "$SOURCE_SHA" "$SUITE"
+
+  laurea-tests:
+    name: "Diagnostic Laurea / Python ${{ matrix.python }}"
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && contains(github.event.head_commit.message, '[laurea-only]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        python: ['3.11.16', '3.12.14']
+    env:
+      SOURCE_SHA: 8fcaaa729c87d37afb73e0a14ce0b8348b6e25ec
+      SOURCE_BASE: faf6c5f67130925518233f5f99a76182b544fb85
+      PROFILE_SHA: 0075acc195907fc5a51e3a9d0e35a4394e414111
+      EXPECTED_PYTHON: ${{ matrix.python }}
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_NO_LAZY_FETCH: '1'
+      PIP_NO_INPUT: '1'
+    steps:
+      - name: Set up already-authorized exact Python runtime
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python }}
+          check-latest: false
+
+      - name: Fetch separate immutable public target and accepted profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in "$SOURCE_SHA" "$SOURCE_BASE" "$PROFILE_SHA"; do
+            [[ "$value" =~ ^[0-9a-f]{40}$ ]]
+          done
+          git init source
+          git -C source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags \
+            https://github.com/organvm/laurea.git "$SOURCE_SHA" "$SOURCE_BASE"
+          git -C source -c core.hooksPath=/dev/null checkout --detach "$SOURCE_SHA"
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          git init relay-source
+          git -C relay-source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --depth=1 \
+            https://github.com/4444J99/organvm-ci-relay.git "$PROFILE_SHA"
+          git -C relay-source -c core.hooksPath=/dev/null checkout --detach "$PROFILE_SHA"
+          test "$(git -C relay-source rev-parse HEAD)" = "$PROFILE_SHA"
+          printf '%s  %s\n' fa717be64b75f2b185a63904c10d9bae20ba31a76744df83278629f8908cb9f8 \
+            relay-source/profiles/python-pytest-test-v1.sh | sha256sum -c -
+          export SOURCE_TREE="$(git -C source rev-parse 'HEAD^{tree}')"
+          python - <<'PY'
+          import json, os, sys
+          from datetime import datetime, timezone
+          assert '.'.join(map(str, sys.version_info[:3])) == os.environ['EXPECTED_PYTHON']
+          print(json.dumps({
+              'schema': 'issue32.source-verification-start.v1',
+              'observed_at_utc': datetime.now(timezone.utc).isoformat(),
+              'repository': 'organvm/laurea',
+              'repository_id': 1289397231,
+              'source_sha': os.environ['SOURCE_SHA'],
+              'source_tree': os.environ['SOURCE_TREE'],
+              'profile_sha': os.environ['PROFILE_SHA'],
+              'python': sys.version.split()[0],
+              'workflow_sha': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'native_scheduled_chat_proof': False,
+              'canonical_relay_receipt': False,
+              'merge_authority': False
+          }, sort_keys=True))
+          PY
+
+      - name: Execute unchanged accepted Laurea profile
+        working-directory: source
+        shell: bash
+        run: timeout 420s bash ../relay-source/profiles/python-pytest-test-v1.sh
+
+      - name: Execute repository arena inventory and stale-table predicates
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p arena/entries
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          laurea arena-table --entries arena/entries --baseline arena/baseline.json --leaderboard "$scratch/LEADERBOARD.md"
+          if test "$(git diff --name-only "$SOURCE_BASE" HEAD -- LEADERBOARD.md)" = LEADERBOARD.md; then
+            laurea arena-table --entries arena/entries --baseline arena/baseline.json --check
+          fi
+
+      - name: Verify source identity and tracked bytes remained unchanged
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
+          printf 'Diagnostic target suite completed for %s on Python %s; not native acceptance or canonical ledger publication.\n' "$SOURCE_SHA" "$EXPECTED_PYTHON"
