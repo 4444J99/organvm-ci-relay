@@ -141,18 +141,30 @@ def prepare(root: Path, repository: str, repository_id: int, branch: str,
     return plan
 
 
+def _readback_object(value: Any) -> dict:
+    """Refuse absent or malformed connector objects without dereferencing them."""
+    if not isinstance(value, dict):
+        raise Refused("Missing or malformed connector readback object")
+    return value
+
+
 def verify_preflight(plan: dict, repository: dict, pr: dict, branch: dict) -> None:
     """Validate fresh normalized repo/PR metadata and REST branch readback."""
+    repository = _readback_object(repository)
+    pr = _readback_object(pr)
+    branch = _readback_object(branch)
+    permissions = _readback_object(repository.get("permissions"))
+    branch_commit = _readback_object(branch.get("commit"))
     if (str(repository.get("id")) != str(plan["repository_id"])
             or repository.get("repository_full_name") != plan["repository_full_name"]
             or repository.get("archived") is not False
-            or repository.get("permissions", {}).get("push") is not True):
+            or permissions.get("push") is not True):
         raise Refused("Repository identity, lifecycle or write permission changed")
     if (not repository.get("default_branch")
             or plan["branch"] == repository["default_branch"]
             or branch.get("name") != plan["branch"]
             or branch.get("protected") is not False
-            or branch.get("commit", {}).get("sha") != plan["expected_head_sha"]):
+            or branch_commit.get("sha") != plan["expected_head_sha"]):
         raise Refused("Branch is protected, unknown, default, or moved")
     if (pr.get("state") != "open" or pr.get("merged") is not False
             or pr.get("head") != plan["branch"]
@@ -166,9 +178,16 @@ def verify_preflight(plan: dict, repository: dict, pr: dict, branch: dict) -> No
 def verify_created(plan: dict, tree: dict, commit: dict,
                    observed_head: str) -> dict[str, Any]:
     """Return non-forced ref arguments only after exact tree/parent readback."""
+    tree = _readback_object(tree)
+    commit = _readback_object(commit)
+    commit_tree = _readback_object(commit.get("tree"))
+    parents = commit.get("parents")
+    if not isinstance(parents, list):
+        raise Refused("Missing or malformed connector parent collection")
+    parent_shas = [_readback_object(parent).get("sha") for parent in parents]
     if (tree.get("sha") != plan["expected_tree_sha"]
-            or commit.get("tree", {}).get("sha") != plan["expected_tree_sha"]
-            or [p.get("sha") for p in commit.get("parents", [])] != plan["parents"]
+            or commit_tree.get("sha") != plan["expected_tree_sha"]
+            or parent_shas != plan["parents"]
             or observed_head != plan["expected_head_sha"]):
         raise Refused("Tree, ordered parents, or current branch failed readback")
     return {"repository_full_name": plan["repository_full_name"],
