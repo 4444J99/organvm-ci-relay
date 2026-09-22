@@ -94,7 +94,7 @@ jobs:
         if: matrix.suite != 'pr38-publication'
         working-directory: source
         shell: bash
-        run: timeout 240s node scripts/test-policy.mjs --base-root .
+        run: timeout 120s node --test scripts/test-registry-boundaries.mjs
 
       - name: Execute registry boundary tests
         if: matrix.suite != 'pr38-publication'
@@ -140,7 +140,7 @@ jobs:
       matrix:
         python: ['3.11.16', '3.12.14']
     env:
-      SOURCE_SHA: 8fcaaa729c87d37afb73e0a14ce0b8348b6e25ec
+      SOURCE_SHA: befd553d2e9903e7bd882bfdbbdf79435cf7f59e
       SOURCE_BASE: faf6c5f67130925518233f5f99a76182b544fb85
       PROFILE_SHA: 0075acc195907fc5a51e3a9d0e35a4394e414111
       EXPECTED_PYTHON: ${{ matrix.python }}
