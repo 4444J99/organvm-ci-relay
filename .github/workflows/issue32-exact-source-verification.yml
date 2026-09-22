@@ -94,7 +94,7 @@ jobs:
         if: matrix.suite != 'pr38-publication'
         working-directory: source
         shell: bash
-        run: timeout 120s node --test scripts/test-registry-boundaries.mjs
+        run: timeout 240s node scripts/test-policy.mjs --base-root .
 
       - name: Execute registry boundary tests
         if: matrix.suite != 'pr38-publication'
