@@ -1,0 +1,129 @@
+name: Issue 32 isolated source verification
+
+# One-shot diagnostic branch only. Never a required check or merge authority.
+# The examined source is fetched separately at an immutable SHA; this workflow
+# is not overlaid onto the source under test and is not intended for main.
+on:
+  push:
+    branches: [verify/issue32-exact-source-20260922]
+    paths: [.github/workflows/issue32-exact-source-verification.yml]
+
+permissions: {}
+
+concurrency:
+  group: issue32-exact-source-20260922
+  cancel-in-progress: false
+
+jobs:
+  source-tests:
+    name: "Diagnostic source suite / ${{ matrix.suite }}"
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - suite: pr30-admission
+            source_sha: 70f2006590c7c5e809c33fbc314f5bfe2e9dfab7
+          - suite: pr37-policy
+            source_sha: dcc3538be7d6a357266c2096a897792472f2b233
+          - suite: pr38-publication
+            source_sha: 2549e321948d976a37a5814422c45b1d273fae2c
+    env:
+      SOURCE_SHA: ${{ matrix.source_sha }}
+      SUITE: ${{ matrix.suite }}
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_NO_LAZY_FETCH: '1'
+      GIT_OPTIONAL_LOCKS: '0'
+    steps:
+      - name: Fetch immutable public source without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git init source
+          git -C source -c credential.helper= -c core.hooksPath=/dev/null \
+            fetch --no-tags --depth=1 \
+            https://github.com/4444J99/organvm-ci-relay.git "$SOURCE_SHA"
+          git -C source -c core.hooksPath=/dev/null checkout --detach FETCH_HEAD
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          export SOURCE_TREE="$(git -C source rev-parse 'HEAD^{tree}')"
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          print(json.dumps({
+              'schema': 'issue32.source-verification-start.v1',
+              'observed_at_utc': datetime.now(timezone.utc).isoformat(),
+              'source_sha': os.environ['SOURCE_SHA'],
+              'source_tree': os.environ['SOURCE_TREE'],
+              'suite': os.environ['SUITE'],
+              'workflow_sha': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'event': os.environ['GITHUB_EVENT_NAME'],
+              'runner_os': os.environ['RUNNER_OS'],
+              'native_scheduled_chat_proof': False,
+              'merge_authority': False
+          }, sort_keys=True))
+          PY
+
+      - name: Install the existing pinned Node runtime
+        if: matrix.suite != 'pr38-publication'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.23.2'
+          package-manager-cache: false
+
+      - name: Verify exact runtime
+        if: matrix.suite != 'pr38-publication'
+        shell: bash
+        run: test "$(node --version)" = v22.23.2
+
+      - name: Execute admission and enforcement tests
+        if: matrix.suite == 'pr30-admission'
+        working-directory: source
+        shell: bash
+        run: timeout 180s node --test admission-app/test/*.test.mjs
+
+      - name: Execute complete policy regression suite
+        if: matrix.suite != 'pr38-publication'
+        working-directory: source
+        shell: bash
+        run: timeout 240s node scripts/test-policy.mjs --base-root .
+
+      - name: Execute registry boundary tests
+        if: matrix.suite != 'pr38-publication'
+        working-directory: source
+        shell: bash
+        run: timeout 120s node --test scripts/test-registry-boundaries.mjs
+
+      - name: Execute source policy self-check
+        if: matrix.suite != 'pr38-publication'
+        working-directory: source
+        shell: bash
+        run: timeout 120s node scripts/verify-policy.mjs --candidate-root . --base-root .
+
+      - name: Execute complete publication helper tests
+        if: matrix.suite == 'pr38-publication'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+          git --version
+          timeout 180s python3 -B -m unittest discover -s scripts -p 'test_connector_publish*.py' -v
+
+      - name: Verify source stayed unchanged
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
+          printf 'Source suite completed for %s (%s). This is not activation or merge approval.\n' "$SOURCE_SHA" "$SUITE"
