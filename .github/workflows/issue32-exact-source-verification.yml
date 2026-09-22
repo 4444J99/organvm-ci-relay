@@ -17,7 +17,7 @@ concurrency:
 jobs:
   source-tests:
     name: "Diagnostic source suite / ${{ matrix.suite }}"
-    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && !contains(github.event.head_commit.message, '[laurea-only]')
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && contains(github.event.head_commit.message, '[relay-only]')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions: {}
@@ -225,3 +225,44 @@ jobs:
           git diff --exit-code
           git diff --cached --exit-code
           printf 'Diagnostic target suite completed for %s on Python %s; not native acceptance or canonical ledger publication.\n' "$SOURCE_SHA" "$EXPECTED_PYTHON"
+
+  public-source-materials:
+    name: Diagnostic public source materialization
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && contains(github.event.head_commit.message, '[materials-only]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_CONFIG_GLOBAL: /dev/null
+    steps:
+      - name: Bundle only the two requested immutable public revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir materials
+          for spec in \
+            'hospes|2d5c984465e121e1ced68f353b4255ebe935ea76|1ff46c273a9aef9ff5f6b920f62a2278aa394ef5' \
+            'laurea|8fcaaa729c87d37afb73e0a14ce0b8348b6e25ec|e97c67dce19798babeb1203bef913e84322fa7e1'
+          do
+            IFS='|' read -r repository revision tree <<< "$spec"
+            git init --bare "$repository.git"
+            git -C "$repository.git" -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags \
+              "https://github.com/organvm/$repository.git" "$revision"
+            test "$(git -C "$repository.git" rev-parse FETCH_HEAD)" = "$revision"
+            test "$(git -C "$repository.git" rev-parse 'FETCH_HEAD^{tree}')" = "$tree"
+            git -C "$repository.git" update-ref refs/heads/diagnostic-source "$revision"
+            git -C "$repository.git" bundle create "../materials/$repository.bundle" refs/heads/diagnostic-source
+            git -C "$repository.git" bundle verify "../materials/$repository.bundle"
+            printf '%s %s %s\n' "$repository" "$revision" "$tree" >> materials/source-manifest.txt
+          done
+          (cd materials && sha256sum hospes.bundle laurea.bundle source-manifest.txt > SHA256SUMS)
+          cat materials/source-manifest.txt materials/SHA256SUMS
+      - name: Retain bounded public source for direct-session verification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: diagnostic-public-source-materials
+          path: materials/
+          if-no-files-found: error
+          retention-days: 7
