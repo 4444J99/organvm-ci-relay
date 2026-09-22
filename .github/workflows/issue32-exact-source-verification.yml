@@ -266,3 +266,214 @@ jobs:
           path: materials/
           if-no-files-found: error
           retention-days: 7
+
+  hospes-python:
+    name: Diagnostic Hospes / python-${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+        - '3.11'
+        - '3.14'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fetch separate immutable public source
+      shell: bash
+      run: |
+        set -euo pipefail
+        for value in "$SOURCE_SHA" "$SOURCE_BASE" "$SOURCE_TREE"; do
+          [[ "$value" =~ ^[0-9a-f]{40}$ ]]
+        done
+        git init source
+        git -C source remote add origin https://github.com/organvm/hospes.git
+        git -C source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin "$SOURCE_SHA" "$SOURCE_BASE"
+        git -C source -c core.hooksPath=/dev/null checkout --detach "$SOURCE_SHA"
+        git -C source update-ref refs/remotes/origin/main "$SOURCE_BASE"
+        test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+        test "$(git -C source rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+        printf 'Exact public Hospes source %s tree %s base %s; diagnostic workflow %s.\n' "$SOURCE_SHA" "$SOURCE_TREE" "$SOURCE_BASE" "$GITHUB_SHA"
+        python3 --version
+        git --version
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: pip install -e '.[test,api]'
+      working-directory: source
+      shell: bash
+    - name: Run done predicate
+      run: bash done.sh
+      working-directory: source
+      shell: bash
+    - name: Verify exact tracked source after acceptance
+      working-directory: source
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+        test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+        git diff --exit-code
+        git diff --cached --exit-code
+        printf 'Hospes diagnostic source remained unchanged: %s. No native acceptance, release or merge approval.\n' "$SOURCE_SHA"
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && contains(github.event.head_commit.message, '[hospes-only]')
+    permissions: {}
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: 62b11559c5856217ed95b5b8afc34d5035a185fb
+      SOURCE_TREE: e1cd2fe6c828f9cc718f03fc839b2f2f25260adf
+      SOURCE_BASE: 3ea044cf521296fe70a608dc64d4d03c338479ea
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_CONFIG_GLOBAL: /dev/null
+      PIP_NO_INPUT: '1'
+  hospes-dashboard-quality:
+    name: Diagnostic Hospes / dashboard-quality
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fetch separate immutable public source
+      shell: bash
+      run: |
+        set -euo pipefail
+        for value in "$SOURCE_SHA" "$SOURCE_BASE" "$SOURCE_TREE"; do
+          [[ "$value" =~ ^[0-9a-f]{40}$ ]]
+        done
+        git init source
+        git -C source remote add origin https://github.com/organvm/hospes.git
+        git -C source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin "$SOURCE_SHA" "$SOURCE_BASE"
+        git -C source -c core.hooksPath=/dev/null checkout --detach "$SOURCE_SHA"
+        git -C source update-ref refs/remotes/origin/main "$SOURCE_BASE"
+        test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+        test "$(git -C source rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+        printf 'Exact public Hospes source %s tree %s base %s; diagnostic workflow %s.\n' "$SOURCE_SHA" "$SOURCE_TREE" "$SOURCE_BASE" "$GITHUB_SHA"
+        python3 --version
+        git --version
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.11'
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: '24'
+    - name: Install Python and browser dependencies
+      run: pip install -e '.[test,api]'
+      working-directory: source
+      shell: bash
+    - name: Install pinned dashboard tooling
+      run: npm ci
+      working-directory: source
+      shell: bash
+    - name: Install pinned Chromium
+      run: npx playwright install --with-deps chromium
+      working-directory: source
+      shell: bash
+    - name: Run authenticated mobile audit
+      env:
+        HOSPES_OPERATOR_TOKEN: synthetic-ci-operator-token
+      run: bash scripts/run-dashboard-quality.sh
+      working-directory: source
+      shell: bash
+    - name: Upload dashboard evidence
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: diagnostic-hospes-dashboard-quality
+        path: source/artifacts/dashboard-quality
+        if-no-files-found: error
+        retention-days: 7
+    - name: Verify exact tracked source after acceptance
+      working-directory: source
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+        test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+        git diff --exit-code
+        git diff --cached --exit-code
+        printf 'Hospes diagnostic source remained unchanged: %s. No native acceptance, release or merge approval.\n' "$SOURCE_SHA"
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && contains(github.event.head_commit.message, '[hospes-only]')
+    permissions: {}
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: 62b11559c5856217ed95b5b8afc34d5035a185fb
+      SOURCE_TREE: e1cd2fe6c828f9cc718f03fc839b2f2f25260adf
+      SOURCE_BASE: 3ea044cf521296fe70a608dc64d4d03c338479ea
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_CONFIG_GLOBAL: /dev/null
+      PIP_NO_INPUT: '1'
+  hospes-postgresql-16:
+    name: Diagnostic Hospes / postgresql-16
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fetch separate immutable public source
+      shell: bash
+      run: |
+        set -euo pipefail
+        for value in "$SOURCE_SHA" "$SOURCE_BASE" "$SOURCE_TREE"; do
+          [[ "$value" =~ ^[0-9a-f]{40}$ ]]
+        done
+        git init source
+        git -C source remote add origin https://github.com/organvm/hospes.git
+        git -C source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin "$SOURCE_SHA" "$SOURCE_BASE"
+        git -C source -c core.hooksPath=/dev/null checkout --detach "$SOURCE_SHA"
+        git -C source update-ref refs/remotes/origin/main "$SOURCE_BASE"
+        test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+        test "$(git -C source rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+        printf 'Exact public Hospes source %s tree %s base %s; diagnostic workflow %s.\n' "$SOURCE_SHA" "$SOURCE_TREE" "$SOURCE_BASE" "$GITHUB_SHA"
+        python3 --version
+        git --version
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.11'
+    - name: Install PostgreSQL 16 toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes postgresql-16
+      working-directory: source
+      shell: bash
+    - name: Verify PostgreSQL 16 TLS bootstrap and migration ledger
+      env:
+        HOSPES_POSTGRES_BIN: /usr/lib/postgresql/16/bin
+      run: bash scripts/verify-postgres-bootstrap.sh
+      working-directory: source
+      shell: bash
+    - name: Verify exact tracked source after acceptance
+      working-directory: source
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+        test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+        git diff --exit-code
+        git diff --cached --exit-code
+        printf 'Hospes diagnostic source remained unchanged: %s. No native acceptance, release or merge approval.\n' "$SOURCE_SHA"
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && contains(github.event.head_commit.message, '[hospes-only]')
+    permissions: {}
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: 62b11559c5856217ed95b5b8afc34d5035a185fb
+      SOURCE_TREE: e1cd2fe6c828f9cc718f03fc839b2f2f25260adf
+      SOURCE_BASE: 3ea044cf521296fe70a608dc64d4d03c338479ea
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_CONFIG_GLOBAL: /dev/null
+      PIP_NO_INPUT: '1'
+  hospes-complete:
+    name: Diagnostic Hospes / hospes-done
+    if: always() && github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && contains(github.event.head_commit.message, '[hospes-only]')
+    needs:
+    - hospes-python
+    - hospes-dashboard-quality
+    - hospes-postgresql-16
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require the complete Phase 0 predicate set
+      env:
+        PYTHON_RESULT: ${{ needs.hospes-python.result }}
+        DASHBOARD_RESULT: ${{ needs.hospes-dashboard-quality.result }}
+        POSTGRESQL_RESULT: ${{ needs.hospes-postgresql-16.result }}
+      run: |
+        test "$PYTHON_RESULT" = success
+        test "$DASHBOARD_RESULT" = success
+        test "$POSTGRESQL_RESULT" = success
+    permissions: {}
+    timeout-minutes: 10
