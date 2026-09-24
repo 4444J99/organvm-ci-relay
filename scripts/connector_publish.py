@@ -171,7 +171,9 @@ def verify_preflight(plan: dict, repository: dict, pr: dict, branch: dict) -> No
             or pr.get("head_sha") != plan["expected_head_sha"]
             or pr.get("head_repo_full_name") != plan["repository_full_name"]
             or str(pr.get("head_repo_id")) != str(plan["repository_id"])
-            or pr.get("base") == plan["branch"]):
+            or not isinstance(pr.get("base"), str)
+            or not pr["base"].strip()
+            or pr["base"] == plan["branch"]):
         raise Refused("PR is closed, merged, moved, or bound to another repository")
 
 
