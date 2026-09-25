@@ -768,7 +768,7 @@ const expectedProfileDigests = new Map([
   ['profiles/process-environment-enactment-v1.sh',
     '1d0ddd2d825ab74b8b28ffbd9bdeec513b21ba76281220601f51e28ae5721fb7'],
   ['profiles/python-pytest-test-v1.sh',
-    '151a2bde0add3b0b41be39427ea6c10488e2560eee74ac889f30b0d96cfb931c'],
+    'fa717be64b75f2b185a63904c10d9bae20ba31a76744df83278629f8908cb9f8'],
   ['profiles/python-ruff-pytest-v1.sh',
     '731689698f7fed68492fb8c6cb9a55187837e39cf8c2e05758b366dcb74f28b4'],
 ]);
