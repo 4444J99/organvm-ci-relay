@@ -1,0 +1,211 @@
+# Finite direct-Chat engineering continuation; not native scheduled-Chat acceptance.
+# Only the final isolated job receives a write token; it never executes target source.
+name: Issue 32 bounded current-base integration
+'on':
+  push:
+    branches:
+    - verify/issue32-current-base-20260924
+    paths:
+    - .github/workflows/issue32-current-base-integration.yml
+permissions: {}
+concurrency:
+  group: issue32-bounded-current-base-integration
+  cancel-in-progress: false
+env:
+  EXPECTED_HEAD: 70f2006590c7c5e809c33fbc314f5bfe2e9dfab7
+  EXPECTED_MAIN: 0075acc195907fc5a51e3a9d0e35a4394e414111
+  GIT_AUTHOR_NAME: 4444J99
+  GIT_COMMITTER_NAME: 4444J99
+  GIT_AUTHOR_EMAIL: 24796448+4444J99@users.noreply.github.com
+  GIT_COMMITTER_EMAIL: 24796448+4444J99@users.noreply.github.com
+  GIT_TERMINAL_PROMPT: '0'
+  GIT_CONFIG_NOSYSTEM: '1'
+  GIT_CONFIG_GLOBAL: /dev/null
+  GIT_NO_LAZY_FETCH: '1'
+  GIT_OPTIONAL_LOCKS: '0'
+jobs:
+  verify_integration:
+    if: github.repository == '4444J99/organvm-ci-relay' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
+    outputs:
+      candidate: ${{ steps.compose.outputs.candidate }}
+      tree: ${{ steps.compose.outputs.tree }}
+      timestamp: ${{ steps.clock.outputs.timestamp }}
+    steps:
+    - name: Capture commit timestamp
+      id: clock
+      shell: bash
+      run: echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+    - name: Compose immutable sources and one reviewed seal correction
+      id: compose
+      shell: bash
+      env:
+        COMMIT_TIME: ${{ steps.clock.outputs.timestamp }}
+      run: |
+        set -euo pipefail
+        git init source
+        git -C source remote add origin https://github.com/4444J99/organvm-ci-relay.git
+        timeout 60s git -C source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin "$EXPECTED_HEAD" "$EXPECTED_MAIN"
+        test "$(git -C source cat-file -t "$EXPECTED_HEAD")" = commit
+        test "$(git -C source cat-file -t "$EXPECTED_MAIN")" = commit
+        git -C source -c core.hooksPath=/dev/null checkout --detach "$EXPECTED_HEAD"
+        git -C source -c core.hooksPath=/dev/null merge --no-commit --no-ff "$EXPECTED_MAIN"
+        export MERGED_TREE="$(git -C source write-tree)"
+        python3 - <<'PYCODE'
+        from pathlib import Path
+        import hashlib
+        profile = Path('source/profiles/python-pytest-test-v1.sh').read_bytes()
+        new = 'fa717be64b75f2b185a63904c10d9bae20ba31a76744df83278629f8908cb9f8'
+        old = '151a2bde0add3b0b41be39427ea6c10488e2560eee74ac889f30b0d96cfb931c'
+        assert hashlib.sha256(profile).hexdigest() == new, 'main profile changed'
+        p = Path('source/scripts/verify-policy.mjs')
+        before = p.read_bytes()
+        assert before.count(old.encode()) == 1, 'expected exactly one predecessor seal'
+        assert new.encode() not in before, 'unexpected existing replacement'
+        after = before.replace(old.encode(), new.encode())
+        assert len(before) == len(after)
+        p.write_bytes(after)
+        PYCODE
+        git -C source add -- scripts/verify-policy.mjs
+        test "$(git -C source diff --cached --name-only "$MERGED_TREE")" = scripts/verify-policy.mjs
+        test "$(git -C source ls-files -s scripts/verify-policy.mjs | cut -d' ' -f1)" = 100755
+        git -C source diff --cached --check
+        TREE="$(git -C source write-tree)"
+        export GIT_AUTHOR_DATE="$COMMIT_TIME" GIT_COMMITTER_DATE="$COMMIT_TIME"
+        CANDIDATE="$(printf '%s\n' 'fix(relay): integrate current main and preserve the reviewed Laurea seal' '' 'Compose current main into PR #30 without dropping its parser, media or admission repairs.' 'Reconcile only the existing Laurea profile seal; keep independent trust promotion and governor activation required.' '' 'Refs #3, #32, #37' | git -C source commit-tree "$TREE" -p "$EXPECTED_HEAD" -p "$EXPECTED_MAIN")"
+        git -C source -c core.hooksPath=/dev/null checkout --detach "$CANDIDATE"
+        printf 'candidate=%s\ntree=%s\n' "$CANDIDATE" "$TREE" >> "$GITHUB_OUTPUT"
+        printf 'Prepared source commit %s, tree %s, parents %s %s\n' "$CANDIDATE" "$TREE" "$EXPECTED_HEAD" "$EXPECTED_MAIN"
+    - name: Install the existing pinned Node runtime
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 22.23.2
+        package-manager-cache: false
+    - name: Test the complete integrated source
+      shell: bash
+      working-directory: source
+      run: |
+        set -euo pipefail
+        test "$(node --version)" = v22.23.2
+        timeout 180s node --test admission-app/test/*.test.mjs
+        timeout 240s node scripts/test-policy.mjs --base-root .
+        timeout 120s node --test scripts/test-registry-boundaries.mjs
+        timeout 120s node scripts/verify-policy.mjs --candidate-root . --base-root .
+        timeout 180s python3 -B -m unittest discover -s scripts -p 'test_connector_publish*.py' -v
+        git diff --exit-code
+        git diff --cached --exit-code
+        test "$(git rev-parse HEAD)" = '${{ steps.compose.outputs.candidate }}'
+        test "$(git rev-parse HEAD^{tree})" = '${{ steps.compose.outputs.tree }}'
+        printf 'All selected integrated-source suites passed at %s\n' '${{ steps.compose.outputs.candidate }}'
+  verify_publication:
+    if: github.repository == '4444J99/organvm-ci-relay' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+    - name: Test PR 38 current immutable head
+      shell: bash
+      run: |
+        set -euo pipefail
+        SHA=9c5b332206f739045728b08c4624ef4ee12b65ec
+        git init source
+        timeout 60s git -C source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --depth=1 https://github.com/4444J99/organvm-ci-relay.git "$SHA"
+        git -C source -c core.hooksPath=/dev/null checkout --detach FETCH_HEAD
+        test "$(git -C source rev-parse HEAD)" = "$SHA"
+        cd source
+        python3 --version; git --version
+        timeout 180s python3 -B -m unittest discover -s scripts -p 'test_connector_publish*.py' -v
+        git diff --exit-code; git diff --cached --exit-code
+        printf 'Publication source verified: %s tree %s\n' "$SHA" "$(git rev-parse HEAD^{tree})"
+  publish_pr30_branch:
+    needs:
+    - verify_integration
+    - verify_publication
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+    - name: Independently reconstruct tested tree without running source
+      id: compose
+      shell: bash
+      env:
+        COMMIT_TIME: ${{ needs.verify_integration.outputs.timestamp }}
+      run: |
+        set -euo pipefail
+        git init source
+        git -C source remote add origin https://github.com/4444J99/organvm-ci-relay.git
+        timeout 60s git -C source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin "$EXPECTED_HEAD" "$EXPECTED_MAIN"
+        test "$(git -C source cat-file -t "$EXPECTED_HEAD")" = commit
+        test "$(git -C source cat-file -t "$EXPECTED_MAIN")" = commit
+        git -C source -c core.hooksPath=/dev/null checkout --detach "$EXPECTED_HEAD"
+        git -C source -c core.hooksPath=/dev/null merge --no-commit --no-ff "$EXPECTED_MAIN"
+        export MERGED_TREE="$(git -C source write-tree)"
+        python3 - <<'PYCODE'
+        from pathlib import Path
+        import hashlib
+        profile = Path('source/profiles/python-pytest-test-v1.sh').read_bytes()
+        new = 'fa717be64b75f2b185a63904c10d9bae20ba31a76744df83278629f8908cb9f8'
+        old = '151a2bde0add3b0b41be39427ea6c10488e2560eee74ac889f30b0d96cfb931c'
+        assert hashlib.sha256(profile).hexdigest() == new, 'main profile changed'
+        p = Path('source/scripts/verify-policy.mjs')
+        before = p.read_bytes()
+        assert before.count(old.encode()) == 1, 'expected exactly one predecessor seal'
+        assert new.encode() not in before, 'unexpected existing replacement'
+        after = before.replace(old.encode(), new.encode())
+        assert len(before) == len(after)
+        p.write_bytes(after)
+        PYCODE
+        git -C source add -- scripts/verify-policy.mjs
+        test "$(git -C source diff --cached --name-only "$MERGED_TREE")" = scripts/verify-policy.mjs
+        test "$(git -C source ls-files -s scripts/verify-policy.mjs | cut -d' ' -f1)" = 100755
+        git -C source diff --cached --check
+        TREE="$(git -C source write-tree)"
+        export GIT_AUTHOR_DATE="$COMMIT_TIME" GIT_COMMITTER_DATE="$COMMIT_TIME"
+        CANDIDATE="$(printf '%s\n' 'fix(relay): integrate current main and preserve the reviewed Laurea seal' '' 'Compose current main into PR #30 without dropping its parser, media or admission repairs.' 'Reconcile only the existing Laurea profile seal; keep independent trust promotion and governor activation required.' '' 'Refs #3, #32, #37' | git -C source commit-tree "$TREE" -p "$EXPECTED_HEAD" -p "$EXPECTED_MAIN")"
+        git -C source -c core.hooksPath=/dev/null checkout --detach "$CANDIDATE"
+        printf 'candidate=%s\ntree=%s\n' "$CANDIDATE" "$TREE" >> "$GITHUB_OUTPUT"
+        printf 'Prepared source commit %s, tree %s, parents %s %s\n' "$CANDIDATE" "$TREE" "$EXPECTED_HEAD" "$EXPECTED_MAIN"
+    - name: Publish only exact verified non-protected PR head and read back
+      shell: python
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CANDIDATE: ${{ steps.compose.outputs.candidate }}
+        TESTED_HEAD: ${{ needs.verify_integration.outputs.candidate }}
+        TESTED_TREE: ${{ needs.verify_integration.outputs.tree }}
+      run: |
+        import base64, json, os, re, subprocess, urllib.request
+        repo = '4444J99/organvm-ci-relay'
+        branch = 'security/dedicated-admission-app'
+        candidate = os.environ['CANDIDATE']
+        tree = os.environ['TESTED_TREE']
+        assert re.fullmatch(r'[0-9a-f]{40}', candidate)
+        assert re.fullmatch(r'[0-9a-f]{40}', tree)
+        assert candidate == os.environ['TESTED_HEAD'], 'independent commit reconstruction mismatch'
+        assert subprocess.check_output(['git','-C','source','rev-parse','HEAD^{tree}'], text=True).strip() == tree
+        assert subprocess.check_output(['git','-C','source','show','-s','--format=%P','HEAD'], text=True).strip().split() == [os.environ['EXPECTED_HEAD'], os.environ['EXPECTED_MAIN']]
+        token = os.environ['GH_TOKEN']
+        def read(path):
+            request = urllib.request.Request('https://api.github.com/repos/' + repo + path, headers={'Authorization':'Bearer '+token, 'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'issue32-bounded-source-publisher'})
+            with urllib.request.urlopen(request, timeout=15) as response:
+                return json.load(response)
+        pr = read('/pulls/30')
+        b = read('/branches/security%2Fdedicated-admission-app')
+        main = read('/git/ref/heads/main')
+        assert pr['state'] == 'open' and pr['merged'] is False
+        assert pr['head']['repo']['full_name'] == repo and pr['head']['ref'] == branch
+        assert pr['base']['ref'] == 'main'
+        assert pr['head']['sha'] == b['commit']['sha'] == os.environ['EXPECTED_HEAD'], 'branch advanced; stop'
+        assert b['protected'] is False, 'protected branch is not an allowed publication target'
+        assert main['object']['sha'] == os.environ['EXPECTED_MAIN'], 'main advanced; stop'
+        env = {k:v for k,v in os.environ.items() if k != 'GH_TOKEN'}
+        env.update(GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='http.https://github.com/.extraheader', GIT_CONFIG_VALUE_0='AUTHORIZATION: basic '+base64.b64encode(('x-access-token:'+token).encode()).decode())
+        # No force and no protected/default-branch update; a concurrent forward push refuses.
+        subprocess.run(['git','-C','source','-c','credential.helper=','-c','core.hooksPath=/dev/null','push','origin',candidate+':refs/heads/'+branch], env=env, check=True, timeout=60)
+        ref = read('/git/ref/heads/'+branch)
+        assert ref['object']['sha'] == candidate, 'published branch readback mismatch'
+        assert read('/git/ref/heads/main')['object']['sha'] == os.environ['EXPECTED_MAIN'], 'main changed independently during publication'
+        print(json.dumps({'schema':'issue32.current-base-source-publication.v1','run_id':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'repository':repo,'pr':30,'head':candidate,'tested_head':candidate,'tree':tree,'parents':[os.environ['EXPECTED_HEAD'],os.environ['EXPECTED_MAIN']],'force':False,'branch_readback':'matched','main_unchanged':True,'merged':False,'governor_activated':False,'native_scheduled_chat_proof':False}, sort_keys=True))
