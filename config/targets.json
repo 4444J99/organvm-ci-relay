@@ -64,20 +64,20 @@
     }
   },
   "canary": {
-    "target": "organvm/process-environment-enactment",
+    "target": "4444J99/process-environment-enactment",
     "sha": "ffebb6fa1020098e18020f6a4a845cf933c0df3c",
     "profile": "process-environment-enactment-v1",
     "lead_provider": "relay-push-canary"
   },
   "targets": {
-    "organvm/process-environment-enactment": {
+    "4444J99/process-environment-enactment": {
       "stable_repository_id": "1350942566",
       "visibility": "public",
       "profiles": [
         "process-environment-enactment-v1"
       ]
     },
-    "organvm/learning-resources": {
+    "4444J99/learning-resources": {
       "stable_repository_id": "1155240211",
       "visibility": "public",
       "profiles": [
@@ -88,7 +88,7 @@
         "profile": "python-ruff-pytest-v1"
       }
     },
-    "organvm/organvm-engine": {
+    "4444J99/organvm-engine": {
       "stable_repository_id": "1160447354",
       "visibility": "public",
       "profiles": [
@@ -99,7 +99,7 @@
         "profile": "organvm-engine-v1"
       }
     },
-    "organvm/laurea": {
+    "4444J99/laurea": {
       "stable_repository_id": "1289397231",
       "visibility": "public",
       "profiles": [
@@ -110,7 +110,7 @@
         "profile": "python-pytest-test-v1"
       }
     },
-    "organvm/the-thing-without-a-name": {
+    "4444J99/the-thing-without-a-name-screendance": {
       "stable_repository_id": "1320324017",
       "visibility": "public",
       "profiles": [
@@ -121,7 +121,7 @@
         "profile": "danse-portable-v1"
       }
     },
-    "organvm/alchemical-synthesizer": {
+    "4444J99/alchemical-synthesizer": {
       "stable_repository_id": "1157553907",
       "visibility": "public",
       "profiles": [
