@@ -16,6 +16,21 @@ const requestedBaseRoot = baseRootIndex >= 0
   ? process.argv[baseRootIndex + 1]
   : invocationRoot;
 const sourceRoot = fs.realpathSync(path.resolve(invocationRoot, requestedBaseRoot));
+
+// Resolve fixture identities independently of their current repository location.
+const sourceRegistry = JSON.parse(fs.readFileSync(
+  path.join(sourceRoot, 'config', 'targets.json'), 'utf8',
+));
+const fixtureRepository = (stableId) => {
+  const matches = Object.entries(sourceRegistry.targets).filter(
+    ([, target]) => String(target.stable_repository_id) === stableId,
+  );
+  assert.equal(matches.length, 1, `fixture needs exactly one repository ID ${stableId}`);
+  return matches[0][0];
+};
+const laureaRepository = fixtureRepository('1289397231');
+const learningRepository = fixtureRepository('1155240211');
+const escapeFixtureRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const fixtureRoots = [];
 let regressionCount = 0;
 let acceptanceCount = 0;
@@ -1366,22 +1381,22 @@ try {
 
   expectRejected('regression candidate rejects duplicated Python versions', (root) => {
     mutateRegistry(root, (registry) => {
-      registry.targets['organvm/laurea'].regression_candidate.python_versions = [
+      registry.targets[laureaRepository].regression_candidate.python_versions = [
         '3.11.16',
         '3.12.14',
       ];
     });
-  }, /Invalid regression candidate record: organvm\/laurea/u);
+  }, new RegExp(`Invalid regression candidate record: ${escapeFixtureRegex(laureaRepository)}`, 'u'));
 
   for (const malformedCandidate of [null, false, 0, '']) {
     expectRejected(
       `target rejects malformed regression candidate ${JSON.stringify(malformedCandidate)}`,
       (root) => {
         mutateRegistry(root, (registry) => {
-          registry.targets['organvm/laurea'].regression_candidate = malformedCandidate;
+          registry.targets[laureaRepository].regression_candidate = malformedCandidate;
         });
       },
-      /Invalid regression candidate record: organvm\/laurea/u,
+      new RegExp(`Invalid regression candidate record: ${escapeFixtureRegex(laureaRepository)}`, 'u'),
     );
   }
 
@@ -1409,25 +1424,25 @@ try {
 
   expectRejected('target registry rejects case-insensitive identity collision', (root) => {
     mutateRegistry(root, (registry) => {
-      registry.targets['ORGANVM/LAUREA'] = {
+      registry.targets[laureaRepository.toUpperCase()] = {
         stable_repository_id: '7000000000000999',
         visibility: 'public',
         profiles: ['process-environment-enactment-v1'],
       };
     });
-  }, /Target names must be unique lowercase identities: ORGANVM\/LAUREA/u);
+  }, new RegExp(`Target names must be unique lowercase identities: ${escapeFixtureRegex(laureaRepository.toUpperCase())}`, 'u'));
 
   expectRejected('target registry rejects zero repository ID', (root) => {
     mutateRegistry(root, (registry) => {
-      registry.targets['organvm/laurea'].stable_repository_id = '0';
+      registry.targets[laureaRepository].stable_repository_id = '0';
     });
-  }, /Invalid stable repository ID: organvm\/laurea/u);
+  }, new RegExp(`Invalid stable repository ID: ${escapeFixtureRegex(laureaRepository)}`, 'u'));
 
   expectRejected('target registry rejects duplicate repository ID', (root) => {
     mutateRegistry(root, (registry) => {
       registry.targets['example/repository-id-collision'] = {
         stable_repository_id:
-          registry.targets['organvm/laurea'].stable_repository_id,
+          registry.targets[laureaRepository].stable_repository_id,
         visibility: 'public',
         profiles: ['process-environment-enactment-v1'],
       };
@@ -1503,7 +1518,7 @@ try {
 
   expectAccepted('dynamic regression candidate SHA', (root) => {
     mutateRegistry(root, (registry) => {
-      registry.targets['organvm/learning-resources'].regression_candidate.sha =
+      registry.targets[learningRepository].regression_candidate.sha =
         '1'.repeat(40);
     });
   });
@@ -1516,11 +1531,23 @@ try {
 
   expectAccepted('dynamic push-canary target and profile', (root) => {
     mutateRegistry(root, (registry) => {
-      registry.canary.target = 'organvm/learning-resources';
+      registry.canary.target = learningRepository;
       registry.canary.sha =
-        registry.targets['organvm/learning-resources'].regression_candidate.sha;
+        registry.targets[learningRepository].regression_candidate.sha;
       registry.canary.profile = 'python-ruff-pytest-v1';
       registry.canary.lead_provider = 'relay-python-canary';
+    });
+  });
+
+  expectAccepted('dynamic stable-ID-preserving repository relocation', (root) => {
+    mutateRegistry(root, (registry) => {
+      const relocated = 'example/relocated-learning-resources';
+      assert.equal(registry.targets[relocated], undefined);
+      const existing = registry.targets[learningRepository];
+      assert.equal(String(existing.stable_repository_id), '1155240211');
+      registry.targets[relocated] = existing;
+      delete registry.targets[learningRepository];
+      if (registry.canary.target === learningRepository) registry.canary.target = relocated;
     });
   });
 
