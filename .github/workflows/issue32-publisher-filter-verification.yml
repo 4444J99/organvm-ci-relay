@@ -1,4 +1,4 @@
-name: Publisher documentation acceptance
+name: Publisher subprocess-boundary acceptance
 on:
   push:
     branches: [verify/issue32-publisher-filter-20260924]
@@ -8,7 +8,7 @@ concurrency:
   group: issue32-publisher-filter-diagnostic
   cancel-in-progress: false
 jobs:
-  documentation-test:
+  source-test:
     if: github.repository_id == '1350979676' && github.ref == 'refs/heads/verify/issue32-publisher-filter-20260924'
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -17,42 +17,31 @@ jobs:
       GIT_TERMINAL_PROMPT: '0'
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - name: Verify pinned documentation repair and unchanged executable AST
+      - name: Verify pinned fixed-executable repair and all regressions
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --retry 2 --max-time 30 https://raw.githubusercontent.com/4444J99/organvm-ci-relay/7ac7962747b06f7609b907d1304903e84882bbbe/scripts/issue32-docstring-repair.py > "$RUNNER_TEMP/repair.py"
-          test "$(git hash-object "$RUNNER_TEMP/repair.py")" = 229e77d097f80a212cf03c6dff0bc88e0ef37eed
-          source_dir="$RUNNER_TEMP/doc-source"
+          curl --fail --silent --show-error --retry 2 --max-time 30 https://raw.githubusercontent.com/4444J99/organvm-ci-relay/c36446297cd609a62a3d7cdeed0263eb9045d4c1/scripts/issue32-static-git-repair.py > "$RUNNER_TEMP/repair.py"
+          test "$(git hash-object "$RUNNER_TEMP/repair.py")" = ff1d609fb628921bb59355b1a59a02fc7ced75b1
+          source_dir="$RUNNER_TEMP/source"
           git -c core.hooksPath=/dev/null init -q "$source_dir"
-          git -c core.hooksPath=/dev/null -C "$source_dir" fetch --depth=1 https://github.com/4444J99/organvm-ci-relay.git c213307271c9fad22fe0c247b737f9e89f497b0c
+          git -c core.hooksPath=/dev/null -C "$source_dir" fetch --depth=1 https://github.com/4444J99/organvm-ci-relay.git 1aae0c3f36328dff5629f1c7a9f82e68862c9bb5
           git -c core.hooksPath=/dev/null -C "$source_dir" checkout --detach FETCH_HEAD
           cd "$source_dir"
-          test "$(git rev-parse HEAD)" = c213307271c9fad22fe0c247b737f9e89f497b0c
-          test "$(git rev-parse 'HEAD^{tree}')" = 800a253d26a223f4211a3955858522f1debcc8f6
-          python3 -B - "$RUNNER_TEMP/repair.py" <<'PY'
-          import json, runpy, sys
-          from pathlib import Path
-          repair = runpy.run_path(sys.argv[1], run_name='pinned_documentation_repair')
-          repair['DESCRIPTIONS']['child_git'] = 'Run an isolated Git fixture command inside the initialized test submodule.'
-          for path in repair['SOURCES']:
-              file = Path(path)
-              result, added, count = repair['transform'](path, file.read_bytes())
-              file.write_bytes(result)
-              print(json.dumps({'path': path, 'blob': repair['blob_id'](result), 'docstrings_added': added, 'functions_documented': count, 'executable_ast_unchanged': True}))
-          PY
-          python3 -B -m unittest discover -s scripts -p 'test_connector_publish*.py' -v 2>&1 | tee "$RUNNER_TEMP/doc-tests.log"
-          grep -Eq '^Ran 41 tests in ' "$RUNNER_TEMP/doc-tests.log"
-          grep -qx 'OK' "$RUNNER_TEMP/doc-tests.log"
+          test "$(git rev-parse HEAD)" = 1aae0c3f36328dff5629f1c7a9f82e68862c9bb5
+          test "$(git rev-parse 'HEAD^{tree}')" = 3b7e3b0796d707685d2dbcd99245159e39b45c4c
+          python3 -B "$RUNNER_TEMP/repair.py" apply
+          python3 -B -m unittest discover -s scripts -p 'test_connector_publish*.py' -v 2>&1 | tee "$RUNNER_TEMP/tests.log"
+          grep -Eq '^Ran 43 tests in ' "$RUNNER_TEMP/tests.log"
+          grep -qx 'OK' "$RUNNER_TEMP/tests.log"
           node scripts/verify-policy.mjs --candidate-root . --base-root .
           node scripts/test-policy.mjs --base-root .
           node --test scripts/test-registry-boundaries.mjs
-          test "$(git diff --name-only HEAD | sort)" = $'scripts/connector_publish.py\nscripts/test_connector_publish.py'
           git diff --check
           git diff --stat
-          printf 'DOCSTRINGS_COMPLETE=true EXECUTABLE_AST_UNCHANGED=true\n'
+          printf 'SUBPROCESS_EXECUTABLE_LITERAL=true SHELL_DISABLED=true\n'
   publish-work-branch:
-    needs: documentation-test
+    needs: source-test
     if: github.repository_id == '1350979676' && github.ref == 'refs/heads/verify/issue32-publisher-filter-20260924'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -60,20 +49,14 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - name: Fetch independently pinned deterministic documentation publisher
+      - name: Fetch pinned deterministic source publisher
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --retry 2 --max-time 30 https://raw.githubusercontent.com/4444J99/organvm-ci-relay/7ac7962747b06f7609b907d1304903e84882bbbe/scripts/issue32-docstring-repair.py > "$RUNNER_TEMP/repair.py"
-          test "$(git hash-object "$RUNNER_TEMP/repair.py")" = 229e77d097f80a212cf03c6dff0bc88e0ef37eed
-      - name: Publish only the exact existing unprotected PR38 work branch
+          curl --fail --silent --show-error --retry 2 --max-time 30 https://raw.githubusercontent.com/4444J99/organvm-ci-relay/c36446297cd609a62a3d7cdeed0263eb9045d4c1/scripts/issue32-static-git-repair.py > "$RUNNER_TEMP/repair.py"
+          test "$(git hash-object "$RUNNER_TEMP/repair.py")" = ff1d609fb628921bb59355b1a59a02fc7ced75b1
+      - name: Advance only the exact unprotected PR38 branch
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python3 -B - "$RUNNER_TEMP/repair.py" <<'PY'
-          import runpy, sys
-          repair = runpy.run_path(sys.argv[1], run_name='pinned_documentation_repair')
-          repair['DESCRIPTIONS']['child_git'] = 'Run an isolated Git fixture command inside the initialized test submodule.'
-          repair['publish']()
-          PY
+        run: python3 -B "$RUNNER_TEMP/repair.py" publish
