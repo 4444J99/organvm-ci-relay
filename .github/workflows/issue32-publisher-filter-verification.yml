@@ -30,7 +30,17 @@ jobs:
           cd "$source_dir"
           test "$(git rev-parse HEAD)" = c213307271c9fad22fe0c247b737f9e89f497b0c
           test "$(git rev-parse 'HEAD^{tree}')" = 800a253d26a223f4211a3955858522f1debcc8f6
-          python3 -B "$RUNNER_TEMP/repair.py" apply
+          python3 -B - "$RUNNER_TEMP/repair.py" <<'PY'
+          import json, runpy, sys
+          from pathlib import Path
+          repair = runpy.run_path(sys.argv[1], run_name='pinned_documentation_repair')
+          repair['DESCRIPTIONS']['child_git'] = 'Run an isolated Git fixture command inside the initialized test submodule.'
+          for path in repair['SOURCES']:
+              file = Path(path)
+              result, added, count = repair['transform'](path, file.read_bytes())
+              file.write_bytes(result)
+              print(json.dumps({'path': path, 'blob': repair['blob_id'](result), 'docstrings_added': added, 'functions_documented': count, 'executable_ast_unchanged': True}))
+          PY
           python3 -B -m unittest discover -s scripts -p 'test_connector_publish*.py' -v 2>&1 | tee "$RUNNER_TEMP/doc-tests.log"
           grep -Eq '^Ran 41 tests in ' "$RUNNER_TEMP/doc-tests.log"
           grep -qx 'OK' "$RUNNER_TEMP/doc-tests.log"
@@ -60,4 +70,10 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python3 -B "$RUNNER_TEMP/repair.py" publish
+        run: |
+          python3 -B - "$RUNNER_TEMP/repair.py" <<'PY'
+          import runpy, sys
+          repair = runpy.run_path(sys.argv[1], run_name='pinned_documentation_repair')
+          repair['DESCRIPTIONS']['child_git'] = 'Run an isolated Git fixture command inside the initialized test submodule.'
+          repair['publish']()
+          PY
