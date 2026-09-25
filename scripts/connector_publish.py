@@ -20,16 +20,16 @@ class Refused(ValueError):
 
 def git(root: Path, *args: str) -> bytes:
     'Inspect local Git objects without replacement refs, lazy fetches, locks, or configured filters.'
-    command = ["git", "--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
+    command = ["--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
                "-c", "core.fsmonitor=false", "-C", str(root)]
     if args and args[0] == "status":
         # status can execute clean/process filters while hashing worktree bytes.
         # Read names only (including inherited config), then disable each driver
         # for this invocation without editing config or exposing command values.
         config = subprocess.run(
-            [*command, "config", "--null", "--name-only", "--get-regexp",
+            ["git", *command, "config", "--null", "--name-only", "--get-regexp",
              r"^filter\..*\.(clean|smudge|process|required)$"],
-            check=False, capture_output=True, timeout=30,
+            shell=False, check=False, capture_output=True, timeout=30,
         )
         if (config.returncode not in {0, 1}
                 or (config.returncode == 1 and config.stdout)
@@ -50,8 +50,8 @@ def git(root: Path, *args: str) -> bytes:
             command.extend(["-c", f"{driver}.required=false"])
         # A child repository has independent filter configuration. Never recurse
         # into initialized submodules under an unverified parent-only override.
-        index = subprocess.run([*command, "ls-files", "--stage", "-z"],
-                               check=False, capture_output=True, timeout=30)
+        index = subprocess.run(["git", *command, "ls-files", "--stage", "-z"],
+                               shell=False, check=False, capture_output=True, timeout=30)
         if index.returncode:
             raise Refused("Cannot safely inspect the Git index")
         for record in index.stdout.split(b"\0"):
@@ -64,8 +64,8 @@ def git(root: Path, *args: str) -> bytes:
                 raise Refused("Non-UTF-8 submodule path requires another transport") from exc
             if not separator or (root / path / ".git").exists():
                 raise Refused("Initialized submodule inspection requires a separately reviewed transport")
-    result = subprocess.run([*command, *args],
-                            check=False, capture_output=True, timeout=30)
+    result = subprocess.run(["git", *command, *args],
+                            shell=False, check=False, capture_output=True, timeout=30)
     if result.returncode:
         # Do not echo arbitrary repository output or credential-bearing remotes.
         raise Refused("Local Git inspection failed")

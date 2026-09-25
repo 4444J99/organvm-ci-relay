@@ -122,5 +122,49 @@ class MalformedReadbackTests(unittest.TestCase):
                                   dict(commit, parents=list(reversed(commit["parents"]))), self.head)
 
 
+class GitInvocationBoundaryTests(unittest.TestCase):
+    """Keep the executable and shell policy statically visible at every subprocess call."""
+
+    def test_every_subprocess_uses_literal_git_and_no_shell(self):
+        """Reject indirect executable selection or shell-enabled subprocess calls."""
+        import ast
+        from pathlib import Path
+        tree = ast.parse(Path(bridge.__file__).read_text())
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Attribute)
+                 and isinstance(n.func.value, ast.Name)
+                 and n.func.value.id == 'subprocess' and n.func.attr == 'run']
+        self.assertEqual(len(calls), 3)
+        for call in calls:
+            self.assertIsInstance(call.args[0], ast.List)
+            self.assertIsInstance(call.args[0].elts[0], ast.Constant)
+            self.assertEqual(call.args[0].elts[0].value, 'git')
+            shell = [k.value for k in call.keywords if k.arg == 'shell']
+            self.assertEqual(len(shell), 1)
+            self.assertIsInstance(shell[0], ast.Constant)
+            self.assertIs(shell[0].value, False)
+
+    def test_status_filter_scan_and_index_probe_keep_argument_boundaries(self):
+        """Pass shell metacharacters as literal argv through all three inspection calls."""
+        from pathlib import Path
+        import subprocess
+        from unittest.mock import patch
+        root = Path('/tmp/checkout;not-a-command')
+        argument = 'literal;$(not-a-command)'
+        results = [subprocess.CompletedProcess([], 1, b'', b''),
+                   subprocess.CompletedProcess([], 0, b'', b''),
+                   subprocess.CompletedProcess([], 0, b'clean', b'')]
+        with patch.object(bridge.subprocess, 'run', side_effect=results) as run:
+            self.assertEqual(bridge.git(root, 'status', '--porcelain=v1', '--', argument), b'clean')
+        self.assertEqual(run.call_count, 3)
+        for call in run.call_args_list:
+            argv = call.args[0]
+            self.assertIsInstance(argv, list)
+            self.assertEqual(argv[0], 'git')
+            self.assertEqual(argv[argv.index('-C') + 1], str(root))
+            self.assertIs(call.kwargs['shell'], False)
+        self.assertEqual(run.call_args_list[-1].args[0][-1], argument)
+
+
 if __name__ == "__main__":
     unittest.main()
