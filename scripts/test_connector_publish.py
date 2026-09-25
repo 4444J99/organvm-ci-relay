@@ -15,6 +15,7 @@ spec.loader.exec_module(bridge)
 
 class PublicationTests(unittest.TestCase):
     def setUp(self):
+        'Create an isolated Git repository with a known committed baseline for each test.'
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -28,32 +29,38 @@ class PublicationTests(unittest.TestCase):
         self.base = self.git("rev-parse", "HEAD").strip()
 
     def git(self, *args, data=None, env=None):
+        'Run a Git fixture command in the isolated repository and return its standard output.'
         return subprocess.run(["git", "-C", str(self.root), *args],
                               input=data, capture_output=True, check=True,
                               env=env).stdout.decode().strip("\n")
 
     def write(self, path, data):
+        'Write exact fixture bytes into the isolated repository, creating parent directories as needed.'
         file = self.root / path
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_bytes(data)
 
     def commit(self, message="candidate"):
+        'Commit the fixture changes and return the full candidate object identifier.'
         self.git("add", "-A")
         self.git("commit", "-qm", message)
         return self.git("rev-parse", "HEAD")
 
     def prepare(self, paths, candidate=None, **kwargs):
+        'Prepare a publication from the fixture baseline with an explicit complete path allowance.'
         return bridge.prepare(self.root, "owner/project", 123, "work/test",
                               self.base, candidate or self.git("rev-parse", "HEAD"),
                               paths, **kwargs)
 
     def normal(self):
+        'Create a valid text change containing CRLF and Unicode for shared publication assertions.'
         self.write("change.txt", b"after\r\n\xcf\x80\n")
         self.commit()
         return self.prepare(["change.txt"])
 
     def replay_tree(self, plan):
         # Model GitHub's overlay with real Git objects, not filesystem copying.
+        'Reconstruct the proposed overlay with real Git objects and return its complete tree identifier.'
         index = self.root.parent / (self.root.name + "-index")
         self.addCleanup(lambda: index.unlink(missing_ok=True))
         env = dict(os.environ, GIT_INDEX_FILE=str(index))
@@ -69,6 +76,7 @@ class PublicationTests(unittest.TestCase):
         return self.git("write-tree", env=env)
 
     def readbacks(self, plan):
+        'Build mutually consistent repository, PR, branch, tree, and commit API fixtures.'
         repository = {"id": "123", "repository_full_name": "owner/project",
                       "archived": False, "permissions": {"push": True},
                       "default_branch": "main"}
@@ -83,6 +91,7 @@ class PublicationTests(unittest.TestCase):
         return repository, pr, branch, tree, commit
 
     def test_exact_text_bytes_and_unmodified_files(self):
+        'Verify exact text bytes and unmodified files.'
         p = self.normal()
         self.assertEqual(self.replay_tree(p), p["expected_tree_sha"])
         self.assertEqual(len(p["create_tree"]["tree_elements"]), 1)
@@ -90,6 +99,7 @@ class PublicationTests(unittest.TestCase):
         self.assertIsNone(p["tests_executed"])
 
     def test_add_delete_rename_and_executable_mode(self):
+        'Verify add delete rename and executable mode.'
         (self.root / "change.txt").rename(self.root / "renamed.txt")
         self.write("bin/run", b"#!/bin/sh\nexit 0\n")
         (self.root / "bin/run").chmod(0o755)
@@ -99,6 +109,7 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(p["create_tree"]["tree_elements"][0]["mode"], "100755")
 
     def test_merge_preserves_order_and_reuses_binary_from_second_parent(self):
+        'Verify merge preserves order and reuses binary from second parent.'
         self.git("checkout", "-qb", "incoming")
         self.write("binary.dat", b"\xff\xfe\x00")
         second = self.commit()
@@ -113,6 +124,7 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(self.replay_tree(p), p["expected_tree_sha"])
 
     def test_367_file_merge_reuses_remote_blobs(self):
+        'Verify 367 file merge reuses remote blobs.'
         self.git("checkout", "-qb", "incoming")
         paths = [f"incoming/{i}.txt" for i in range(365)]
         for path in paths:
@@ -131,18 +143,21 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(self.replay_tree(p), p["expected_tree_sha"])
 
     def test_dirty_worktree_is_rejected(self):
+        'Verify dirty worktree is rejected.'
         p = self.normal()
         self.write("untracked", b"do not lose")
         with self.assertRaises(bridge.Refused):
             self.prepare(["change.txt"], p["local_commit_sha"])
 
     def test_incomplete_or_duplicate_scope_is_rejected(self):
+        'Verify incomplete or duplicate scope is rejected.'
         self.normal()
         for paths in ([], ["keep.txt"], ["change.txt", "change.txt"]):
             with self.subTest(paths=paths), self.assertRaises(bridge.Refused):
                 self.prepare(paths)
 
     def test_local_stack_is_rejected(self):
+        'Verify local stack is rejected.'
         self.normal()
         self.write("extra", b"next")
         self.commit()
@@ -150,30 +165,35 @@ class PublicationTests(unittest.TestCase):
             self.prepare(["change.txt", "extra"])
 
     def test_new_binary_fails_closed(self):
+        'Verify new binary fails closed.'
         self.write("binary", b"\xff\x00")
         self.commit()
         with self.assertRaises(bridge.Refused):
             self.prepare(["binary"])
 
     def test_secret_filename_fails_closed(self):
+        'Verify secret filename fails closed.'
         self.write(".env.production", b"example only")
         self.commit()
         with self.assertRaises(bridge.Refused):
             self.prepare([".env.production"])
 
     def test_symlink_change_fails_closed(self):
+        'Verify symlink change fails closed.'
         (self.root / "link").symlink_to("/etc/passwd")
         self.commit()
         with self.assertRaises(bridge.Refused):
             self.prepare(["link"])
 
     def test_nul_binary_fails_closed(self):
+        'Verify nul binary fails closed.'
         self.write("binary", b"text\x00binary")
         self.commit()
         with self.assertRaises(bridge.Refused):
             self.prepare(["binary"])
 
     def test_deleting_or_replacing_symlink_fails_closed(self):
+        'Verify deleting or replacing symlink fails closed.'
         original_base = self.base
         for replacement in (None, b"regular file\n"):
             with self.subTest(replacement=replacement):
@@ -188,6 +208,7 @@ class PublicationTests(unittest.TestCase):
                     self.prepare(["link"])
 
     def test_deleting_submodule_fails_closed(self):
+        'Verify deleting submodule fails closed.'
         self.git("update-index", "--add", "--cacheinfo", "160000", self.base, "module")
         self.git("commit", "-qm", "gitlink baseline")
         self.base = self.git("rev-parse", "HEAD")
@@ -197,6 +218,7 @@ class PublicationTests(unittest.TestCase):
             self.prepare(["module"])
 
     def test_file_directory_transition_fails_closed(self):
+        'Verify file directory transition fails closed.'
         (self.root / "change.txt").unlink()
         self.write("change.txt/inside", b"new")
         self.commit()
@@ -204,27 +226,32 @@ class PublicationTests(unittest.TestCase):
             self.prepare(["change.txt", "change.txt/inside"])
 
     def test_payload_budget_is_enforced(self):
+        'Verify payload budget is enforced.'
         self.normal()
         with self.assertRaises(bridge.Refused):
             self.prepare(["change.txt"], max_bytes=10)
 
     def test_short_sha_is_rejected(self):
+        'Verify short sha is rejected.'
         self.normal()
         with self.assertRaises(bridge.Refused):
             self.prepare(["change.txt"], self.git("rev-parse", "--short", "HEAD"))
 
     def test_noop_is_rejected(self):
+        'Verify noop is rejected.'
         self.git("commit", "--allow-empty", "-qm", "empty")
         with self.assertRaises(bridge.Refused):
             self.prepare([])
 
     def test_replacement_refs_do_not_substitute_tested_tree(self):
+        'Verify replacement refs do not substitute tested tree.'
         p = self.normal()
         self.git("replace", p["local_commit_sha"], self.base)
         self.assertEqual(self.prepare(["change.txt"], p["local_commit_sha"])
                          ["expected_tree_sha"], p["expected_tree_sha"])
 
     def test_git_inspection_does_not_run_fsmonitor(self):
+        'Verify git inspection does not run fsmonitor.'
         marker = self.root / ".git" / "fsmonitor-invoked"
         monitor = self.root / ".git" / "fsmonitor-test"
         monitor.write_text("#!/bin/sh\nprintf invoked > '" + str(marker) + "'\nprintf 'token\\0'\n")
@@ -234,6 +261,7 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
     def test_missing_partial_clone_blob_is_not_fetched(self):
+        'Verify missing partial clone blob is not fetched.'
         self.git("config", "uploadpack.allowFilter", "true")
         blob = self.git("rev-parse", self.base + ":change.txt")
         with tempfile.TemporaryDirectory() as temp:
@@ -250,6 +278,7 @@ class PublicationTests(unittest.TestCase):
             self.assertNotEqual(still_absent.returncode, 0)
 
     def test_valid_readbacks_produce_only_nonforced_update(self):
+        'Verify valid readbacks produce only nonforced update.'
         p = self.normal()
         repo, pr, branch, tree, commit = self.readbacks(p)
         bridge.verify_preflight(p, repo, pr, branch)
@@ -258,6 +287,7 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(update["sha"], "a" * 40)
 
     def test_merged_closed_moved_and_foreign_pr_are_rejected(self):
+        'Verify merged closed moved and foreign pr are rejected.'
         p = self.normal()
         repo, pr, branch, _, _ = self.readbacks(p)
         cases = [("state", "closed"), ("merged", True), ("head_sha", "b" * 40),
@@ -267,6 +297,7 @@ class PublicationTests(unittest.TestCase):
                 bridge.verify_preflight(p, repo, dict(pr, **{key: value}), branch)
 
     def test_unknown_or_protected_branch_is_rejected(self):
+        'Verify unknown or protected branch is rejected.'
         p = self.normal()
         repo, pr, branch, _, _ = self.readbacks(p)
         for value in (True, None, "false", 0):
@@ -274,6 +305,7 @@ class PublicationTests(unittest.TestCase):
                 bridge.verify_preflight(p, repo, pr, dict(branch, protected=value))
 
     def test_repository_identity_permissions_and_default_are_rechecked(self):
+        'Verify repository identity permissions and default are rechecked.'
         p = self.normal()
         repo, pr, branch, _, _ = self.readbacks(p)
         cases = [("id", 999), ("permissions", {"push": False}), ("archived", True),
@@ -283,6 +315,7 @@ class PublicationTests(unittest.TestCase):
                 bridge.verify_preflight(p, dict(repo, **{key: value}), pr, branch)
 
     def test_tree_commit_parent_and_race_mismatch_are_rejected(self):
+        'Verify tree commit parent and race mismatch are rejected.'
         p = self.normal()
         _, _, _, tree, commit = self.readbacks(p)
         cases = [(dict(tree, sha="b" * 40), commit, self.base),
@@ -313,12 +346,14 @@ class PublicationTests(unittest.TestCase):
         return marker
 
     def test_status_suppresses_clean_filter_and_keeps_dirty_detection(self):
+        'Verify status suppresses clean filter and keeps dirty detection.'
         marker = self.configure_filter()
         result = bridge.git(self.root, "status", "--porcelain=v1")
         self.assertFalse(marker.exists(), "inspection executed a clean filter")
         self.assertIn(b"change.txt", result)
 
     def test_status_suppresses_process_filter_before_its_handshake(self):
+        'Verify status suppresses process filter before its handshake.'
         marker = self.configure_filter(kind="process")
         try:
             result = bridge.git(self.root, "status", "--porcelain=v1")
@@ -328,6 +363,7 @@ class PublicationTests(unittest.TestCase):
         self.assertIn(b"change.txt", result)
 
     def test_status_suppresses_included_mixed_case_dotted_driver(self):
+        'Verify status suppresses included mixed case dotted driver.'
         marker = self.configure_filter("Mixed.Case.Driver", included=True)
         config = (self.root / ".git" / "config").read_bytes()
         index = (self.root / ".git" / "index").read_bytes()
@@ -338,6 +374,7 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual((self.root / ".git" / "index").read_bytes(), index)
 
     def test_clean_filter_cannot_mask_dirty_bytes_during_preparation(self):
+        'Verify clean filter cannot mask dirty bytes during preparation.'
         plan = self.normal()
         payload = self.root / ".git" / "filter-payload"
         payload.write_bytes((self.root / "change.txt").read_bytes())
@@ -352,6 +389,7 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
     def test_unused_filter_definition_does_not_block_publication(self):
+        'Verify unused filter definition does not block publication.'
         plan = self.normal()
         self.git("config", "filter.unused.clean", "exit 99")
         self.git("config", "filter.unused.process", "exit 99")
@@ -360,6 +398,7 @@ class PublicationTests(unittest.TestCase):
                          plan["expected_tree_sha"])
 
     def test_unrepresentable_filter_key_is_refused_without_execution(self):
+        'Verify unrepresentable filter key is refused without execution.'
         marker = self.configure_filter("unusual=driver")
         with self.assertRaises(bridge.Refused):
             bridge.git(self.root, "status", "--porcelain=v1")
@@ -367,9 +406,11 @@ class PublicationTests(unittest.TestCase):
 
 
     def test_initialized_submodule_status_is_refused_before_nested_filters(self):
+        'Verify initialized submodule status is refused before nested filters.'
         child = self.root / "module"
         child.mkdir()
         def child_git(*args):
+            'Run an isolated Git fixture command inside the initialized test submodule.'
             return subprocess.run(["git", "-C", str(child), *args],
                                   check=True, capture_output=True).stdout.decode().strip()
         child_git("init", "-q")
@@ -393,6 +434,7 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
     def test_uninitialized_gitlink_does_not_invoke_child_inspection(self):
+        'Verify uninitialized gitlink does not invoke child inspection.'
         self.git("update-index", "--add", "--cacheinfo", "160000", self.base, "module")
         self.git("commit", "-qm", "uninitialized gitlink")
         result = bridge.git(self.root, "status", "--porcelain=v1")

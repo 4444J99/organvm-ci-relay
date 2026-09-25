@@ -19,6 +19,7 @@ class Refused(ValueError):
 
 
 def git(root: Path, *args: str) -> bytes:
+    'Inspect local Git objects without replacement refs, lazy fetches, locks, or configured filters.'
     command = ["git", "--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
                "-c", "core.fsmonitor=false", "-C", str(root)]
     if args and args[0] == "status":
@@ -72,12 +73,14 @@ def git(root: Path, *args: str) -> bytes:
 
 
 def oid(value: str) -> str:
+    'Validate a complete lowercase SHA-1 object identifier before using it in Git requests.'
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
         raise Refused("Require a full lowercase SHA-1 object ID")
     return value
 
 
 def entries(root: Path, revision: str) -> dict[str, tuple[str, str, str]]:
+    'Read recursive Git tree entries while preserving file modes, object types, and UTF-8 paths.'
     result = {}
     for record in git(root, "ls-tree", "-rz", revision).split(b"\0"):
         if not record:
@@ -239,6 +242,7 @@ def verify_created(plan: dict, tree: dict, commit: dict,
 
 
 def main() -> None:
+    'Parse the bounded publication request and report a prepared plan or an explicit refusal.'
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--repository", required=True)
