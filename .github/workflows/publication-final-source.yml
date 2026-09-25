@@ -1,0 +1,83 @@
+name: Issue 32 publication final-source verification
+
+# Diagnostic only, on the existing verification branch; never a required check.
+# No credentials, publication authority, schedule, or production effect.
+on:
+  push:
+    branches: [verify/issue32-exact-source-20260922]
+    paths: [.github/workflows/publication-final-source.yml]
+permissions: {}
+concurrency:
+  group: issue32-exact-source-20260922
+  cancel-in-progress: false
+jobs:
+  publication-tests:
+    name: Diagnostic publication source / 9c5b332
+    if: github.repository == '4444J99/organvm-ci-relay' && github.event_name == 'push' && contains(github.event.head_commit.message, '[publication-final]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      SOURCE_SHA: 9c5b332206f739045728b08c4624ef4ee12b65ec
+      SOURCE_TREE: 954d678fda315e2c5a9c304f4c363f1f7167dbfa
+      GIT_TERMINAL_PROMPT: '0'
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_NO_LAZY_FETCH: '1'
+      GIT_OPTIONAL_LOCKS: '0'
+    steps:
+      - name: Fetch immutable public source without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init source
+          git -C source -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --depth=1 https://github.com/4444J99/organvm-ci-relay.git "$SOURCE_SHA"
+          git -C source -c core.hooksPath=/dev/null checkout --detach FETCH_HEAD
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C source rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          python3 --version
+          git --version
+      - name: Execute all publication tests with no skipped acceptance
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 180s python3 -B - <<'PY'
+          import json, os, platform, subprocess, sys, unittest
+          from datetime import datetime, timezone
+          start = datetime.now(timezone.utc).isoformat()
+          suite = unittest.defaultTestLoader.discover('scripts', pattern='test_connector_publish*.py')
+          expected = suite.countTestCases()
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          valid = (expected == 33 and result.testsRun == expected
+                   and result.wasSuccessful() and not result.skipped
+                   and not result.expectedFailures and not result.unexpectedSuccesses)
+          print(json.dumps({
+              'schema': 'issue32.publication-final-source.v1',
+              'repository_id': 1350979676,
+              'source_sha': os.environ['SOURCE_SHA'],
+              'source_tree': os.environ['SOURCE_TREE'],
+              'workflow_sha': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'started_at': start,
+              'finished_at': datetime.now(timezone.utc).isoformat(),
+              'python': platform.python_version(),
+              'git': subprocess.check_output(['git', '--version'], text=True).strip(),
+              'discovered': expected, 'executed': result.testsRun,
+              'failures': len(result.failures), 'errors': len(result.errors),
+              'skipped': len(result.skipped), 'source_tests_passed': valid,
+              'native_scheduled_chat_proof': False, 'merge_authority': False
+          }, sort_keys=True))
+          sys.exit(0 if valid else 1)
+          PY
+      - name: Verify exact tracked source remained unchanged
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          git diff --exit-code
+          git diff --cached --exit-code
+          printf 'Completed source verification for %s; not a required check, promotion, merge, or deployment.\n' "$SOURCE_SHA"
