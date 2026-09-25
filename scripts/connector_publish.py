@@ -19,11 +19,52 @@ class Refused(ValueError):
 
 
 def git(root: Path, *args: str) -> bytes:
-    result = subprocess.run(
-        ["git", "--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
-         "-c", "core.fsmonitor=false", "-C", str(root), *args],
-        check=False, capture_output=True, timeout=30,
-    )
+    command = ["git", "--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
+               "-c", "core.fsmonitor=false", "-C", str(root)]
+    if args and args[0] == "status":
+        # status can execute clean/process filters while hashing worktree bytes.
+        # Read names only (including inherited config), then disable each driver
+        # for this invocation without editing config or exposing command values.
+        config = subprocess.run(
+            [*command, "config", "--null", "--name-only", "--get-regexp",
+             r"^filter\..*\.(clean|smudge|process|required)$"],
+            check=False, capture_output=True, timeout=30,
+        )
+        if (config.returncode not in {0, 1}
+                or (config.returncode == 1 and config.stdout)
+                or len(config.stdout) > 65_536):
+            raise Refused("Cannot safely inspect Git filter configuration")
+        try:
+            keys = config.stdout.decode("utf-8").split("\0")
+        except UnicodeDecodeError as exc:
+            raise Refused("Cannot safely inspect Git filter configuration") from exc
+        drivers = set()
+        for key in filter(None, keys):
+            if not re.fullmatch(r"filter\.[^=\r\n]+\.(clean|smudge|process|required)", key):
+                raise Refused("Filter key cannot be safely overridden")
+            drivers.add(key.rsplit(".", 1)[0])
+        for driver in sorted(drivers):
+            for name in ("clean", "smudge", "process"):
+                command.extend(["-c", f"{driver}.{name}="])
+            command.extend(["-c", f"{driver}.required=false"])
+        # A child repository has independent filter configuration. Never recurse
+        # into initialized submodules under an unverified parent-only override.
+        index = subprocess.run([*command, "ls-files", "--stage", "-z"],
+                               check=False, capture_output=True, timeout=30)
+        if index.returncode:
+            raise Refused("Cannot safely inspect the Git index")
+        for record in index.stdout.split(b"\0"):
+            if not record.startswith(b"160000 "):
+                continue
+            _, separator, raw_path = record.partition(b"\t")
+            try:
+                path = raw_path.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise Refused("Non-UTF-8 submodule path requires another transport") from exc
+            if not separator or (root / path / ".git").exists():
+                raise Refused("Initialized submodule inspection requires a separately reviewed transport")
+    result = subprocess.run([*command, *args],
+                            check=False, capture_output=True, timeout=30)
     if result.returncode:
         # Do not echo arbitrary repository output or credential-bearing remotes.
         raise Refused("Local Git inspection failed")
