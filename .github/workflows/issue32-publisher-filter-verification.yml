@@ -14,8 +14,8 @@ jobs:
     timeout-minutes: 8
     permissions: {}
     env:
-      EXPECTED_HEAD: a7bb91ed9a0c58be86f3fab158a0253202fd7880
-      EXPECTED_TREE: cb53dda8b4323adb53f36cf7f2a44d3930b6878e
+      EXPECTED_HEAD: ed977e9679d567545b38e9f6c42f6814b4e7b9ca
+      EXPECTED_TREE: 9f8e0e4d3f8cba381da75e11786a2720692d9408
       GIT_TERMINAL_PROMPT: '0'
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
