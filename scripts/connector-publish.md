@@ -13,6 +13,13 @@ The remote commit ID can differ because the connector supplies commit metadata;
 tree identity and ordered parent identity must match. Never carry old commit-SHA
 check results onto the newly created commit.
 
+First discover the actions exposed in the executing session. An installation and
+an "Allow all actions" approval setting do not establish that `create_tree`,
+`create_commit`, or `update_ref` are callable there. When those actions and an
+already-authorized alternative executor are both absent, retain the prepared
+patch and report the missing execution surface; do not claim publication, ask
+for another blanket grant, export credentials, or silently delegate to Work.
+
 ## Existing-PR publication sequence
 
 1. Read current repository instructions, actual permissions, stable repository ID,
@@ -79,13 +86,32 @@ be hydrated through the approved source-read path before preparation; the helper
 does not silently fetch them. Tests include an actual partial clone and a local
 filesystem-monitor sentinel to verify these refusal boundaries.
 
+The cleanliness probe also disables configured clean, smudge, and long-running
+process filters for its own invocation. Filter names are read across the active
+configuration scopes, including includes; command values are neither read into
+the plan nor printed. Repository configuration and index files are not edited.
+Unknown/unrepresentable filter keys and invalid configuration fail closed.
+Identity-filter and unused-filter repositories remain usable. Worktree bytes
+that require a transforming filter to match the index are refused as dirty;
+the helper will not run that filter to normalize or conceal their differences.
+
+Initialized submodules have independent configuration and can run their own
+filters during parent status traversal. Their cleanliness inspection is refused
+before recursion and needs a separately reviewed transport. Uninitialized
+gitlinks do not invoke child inspection; changed gitlinks remain unsupported.
+Use a stable private checkout. These guards are not an operating-system sandbox
+or a lock against another process changing configuration during inspection.
+
 Tests require Python 3.10+ and Git 2.47+, no third-party packages or network:
 
 ```sh
-python -m unittest discover -s scripts -p 'test_connector_publish.py' -v
+python -m unittest discover -s scripts -p 'test_connector_publish*.py' -v
 ```
 
 API contracts:
 - https://docs.github.com/en/rest/git/trees#create-a-tree
 - https://docs.github.com/en/rest/git/commits#create-a-commit
 - https://docs.github.com/en/rest/git/refs#update-a-reference
+
+- https://git-scm.com/docs/gitattributes
+- https://git-scm.com/docs/git-config

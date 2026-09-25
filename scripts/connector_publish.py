@@ -19,11 +19,53 @@ class Refused(ValueError):
 
 
 def git(root: Path, *args: str) -> bytes:
-    result = subprocess.run(
-        ["git", "--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
-         "-c", "core.fsmonitor=false", "-C", str(root), *args],
-        check=False, capture_output=True, timeout=30,
-    )
+    'Inspect local Git objects without replacement refs, lazy fetches, locks, or configured filters.'
+    command = ["--no-replace-objects", "--no-lazy-fetch", "--no-optional-locks",
+               "-c", "core.fsmonitor=false", "-C", str(root)]
+    if args and args[0] == "status":
+        # status can execute clean/process filters while hashing worktree bytes.
+        # Read names only (including inherited config), then disable each driver
+        # for this invocation without editing config or exposing command values.
+        config = subprocess.run(
+            ["git", *command, "config", "--null", "--name-only", "--get-regexp",
+             r"^filter\..*\.(clean|smudge|process|required)$"],
+            shell=False, check=False, capture_output=True, timeout=30,
+        )
+        if (config.returncode not in {0, 1}
+                or (config.returncode == 1 and config.stdout)
+                or len(config.stdout) > 65_536):
+            raise Refused("Cannot safely inspect Git filter configuration")
+        try:
+            keys = config.stdout.decode("utf-8").split("\0")
+        except UnicodeDecodeError as exc:
+            raise Refused("Cannot safely inspect Git filter configuration") from exc
+        drivers = set()
+        for key in filter(None, keys):
+            if not re.fullmatch(r"filter\.[^=\r\n]+\.(clean|smudge|process|required)", key):
+                raise Refused("Filter key cannot be safely overridden")
+            drivers.add(key.rsplit(".", 1)[0])
+        for driver in sorted(drivers):
+            for name in ("clean", "smudge", "process"):
+                command.extend(["-c", f"{driver}.{name}="])
+            command.extend(["-c", f"{driver}.required=false"])
+        # A child repository has independent filter configuration. Never recurse
+        # into initialized submodules under an unverified parent-only override.
+        index = subprocess.run(["git", *command, "ls-files", "--stage", "-z"],
+                               shell=False, check=False, capture_output=True, timeout=30)
+        if index.returncode:
+            raise Refused("Cannot safely inspect the Git index")
+        for record in index.stdout.split(b"\0"):
+            if not record.startswith(b"160000 "):
+                continue
+            _, separator, raw_path = record.partition(b"\t")
+            try:
+                path = raw_path.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise Refused("Non-UTF-8 submodule path requires another transport") from exc
+            if not separator or (root / path / ".git").exists():
+                raise Refused("Initialized submodule inspection requires a separately reviewed transport")
+    result = subprocess.run(["git", *command, *args],
+                            shell=False, check=False, capture_output=True, timeout=30)
     if result.returncode:
         # Do not echo arbitrary repository output or credential-bearing remotes.
         raise Refused("Local Git inspection failed")
@@ -31,12 +73,14 @@ def git(root: Path, *args: str) -> bytes:
 
 
 def oid(value: str) -> str:
+    'Validate a complete lowercase SHA-1 object identifier before using it in Git requests.'
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
         raise Refused("Require a full lowercase SHA-1 object ID")
     return value
 
 
 def entries(root: Path, revision: str) -> dict[str, tuple[str, str, str]]:
+    'Read recursive Git tree entries while preserving file modes, object types, and UTF-8 paths.'
     result = {}
     for record in git(root, "ls-tree", "-rz", revision).split(b"\0"):
         if not record:
@@ -141,34 +185,55 @@ def prepare(root: Path, repository: str, repository_id: int, branch: str,
     return plan
 
 
+def _readback_object(value: Any) -> dict:
+    """Refuse absent or malformed connector objects without dereferencing them."""
+    if not isinstance(value, dict):
+        raise Refused("Missing or malformed connector readback object")
+    return value
+
+
 def verify_preflight(plan: dict, repository: dict, pr: dict, branch: dict) -> None:
     """Validate fresh normalized repo/PR metadata and REST branch readback."""
+    repository = _readback_object(repository)
+    pr = _readback_object(pr)
+    branch = _readback_object(branch)
+    permissions = _readback_object(repository.get("permissions"))
+    branch_commit = _readback_object(branch.get("commit"))
     if (str(repository.get("id")) != str(plan["repository_id"])
             or repository.get("repository_full_name") != plan["repository_full_name"]
             or repository.get("archived") is not False
-            or repository.get("permissions", {}).get("push") is not True):
+            or permissions.get("push") is not True):
         raise Refused("Repository identity, lifecycle or write permission changed")
     if (not repository.get("default_branch")
             or plan["branch"] == repository["default_branch"]
             or branch.get("name") != plan["branch"]
             or branch.get("protected") is not False
-            or branch.get("commit", {}).get("sha") != plan["expected_head_sha"]):
+            or branch_commit.get("sha") != plan["expected_head_sha"]):
         raise Refused("Branch is protected, unknown, default, or moved")
     if (pr.get("state") != "open" or pr.get("merged") is not False
             or pr.get("head") != plan["branch"]
             or pr.get("head_sha") != plan["expected_head_sha"]
             or pr.get("head_repo_full_name") != plan["repository_full_name"]
             or str(pr.get("head_repo_id")) != str(plan["repository_id"])
-            or pr.get("base") == plan["branch"]):
+            or not isinstance(pr.get("base"), str)
+            or not pr["base"].strip()
+            or pr["base"] == plan["branch"]):
         raise Refused("PR is closed, merged, moved, or bound to another repository")
 
 
 def verify_created(plan: dict, tree: dict, commit: dict,
                    observed_head: str) -> dict[str, Any]:
     """Return non-forced ref arguments only after exact tree/parent readback."""
+    tree = _readback_object(tree)
+    commit = _readback_object(commit)
+    commit_tree = _readback_object(commit.get("tree"))
+    parents = commit.get("parents")
+    if not isinstance(parents, list):
+        raise Refused("Missing or malformed connector parent collection")
+    parent_shas = [_readback_object(parent).get("sha") for parent in parents]
     if (tree.get("sha") != plan["expected_tree_sha"]
-            or commit.get("tree", {}).get("sha") != plan["expected_tree_sha"]
-            or [p.get("sha") for p in commit.get("parents", [])] != plan["parents"]
+            or commit_tree.get("sha") != plan["expected_tree_sha"]
+            or parent_shas != plan["parents"]
             or observed_head != plan["expected_head_sha"]):
         raise Refused("Tree, ordered parents, or current branch failed readback")
     return {"repository_full_name": plan["repository_full_name"],
@@ -177,6 +242,7 @@ def verify_created(plan: dict, tree: dict, commit: dict,
 
 
 def main() -> None:
+    'Parse the bounded publication request and report a prepared plan or an explicit refusal.'
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--repository", required=True)
