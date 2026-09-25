@@ -67,7 +67,9 @@ jobs:
         after = before.replace(old.encode(), new.encode())
         assert len(before) == len(after)
         p.write_bytes(after)
+        p.chmod(0o755)  # Restore the verifier mode already retained on main.
         PYCODE
+        test "$(git -C source ls-tree "$EXPECTED_MAIN" -- scripts/verify-policy.mjs | cut -d' ' -f1)" = 100755
         git -C source add -- scripts/verify-policy.mjs
         test "$(git -C source diff --cached --name-only "$MERGED_TREE")" = scripts/verify-policy.mjs
         test "$(git -C source ls-files -s scripts/verify-policy.mjs | cut -d' ' -f1)" = 100755
@@ -158,7 +160,9 @@ jobs:
         after = before.replace(old.encode(), new.encode())
         assert len(before) == len(after)
         p.write_bytes(after)
+        p.chmod(0o755)  # Restore the verifier mode already retained on main.
         PYCODE
+        test "$(git -C source ls-tree "$EXPECTED_MAIN" -- scripts/verify-policy.mjs | cut -d' ' -f1)" = 100755
         git -C source add -- scripts/verify-policy.mjs
         test "$(git -C source diff --cached --name-only "$MERGED_TREE")" = scripts/verify-policy.mjs
         test "$(git -C source ls-files -s scripts/verify-policy.mjs | cut -d' ' -f1)" = 100755
