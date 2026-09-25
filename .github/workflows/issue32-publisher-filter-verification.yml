@@ -1,0 +1,56 @@
+name: Publisher filter-safety diagnostic
+on:
+  push:
+    branches: [verify/issue32-publisher-filter-20260924]
+    paths: [.github/workflows/issue32-publisher-filter-verification.yml]
+permissions: {}
+concurrency:
+  group: issue32-publisher-filter-diagnostic
+  cancel-in-progress: false
+jobs:
+  exact-source:
+    if: github.repository_id == '1350979676' && github.ref == 'refs/heads/verify/issue32-publisher-filter-20260924'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions: {}
+    env:
+      EXPECTED_HEAD: a7bb91ed9a0c58be86f3fab158a0253202fd7880
+      EXPECTED_TREE: cb53dda8b4323adb53f36cf7f2a44d3930b6878e
+      GIT_TERMINAL_PROMPT: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Anonymous exact-source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/issue32-publisher-source"
+          mkdir "$source_dir"
+          git -c core.hooksPath=/dev/null -C "$source_dir" init -q
+          git -c core.hooksPath=/dev/null -C "$source_dir" fetch --depth=1 https://github.com/4444J99/organvm-ci-relay.git "$EXPECTED_HEAD"
+          git -c core.hooksPath=/dev/null -C "$source_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git -C "$source_dir" rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          printf 'SOURCE_HEAD=%s\nSOURCE_TREE=%s\n' "$EXPECTED_HEAD" "$EXPECTED_TREE"
+          printf 'DEFINING_WORKFLOW=%s\nDEFINING_SHA=%s\n' "$GITHUB_WORKFLOW_REF" "$GITHUB_SHA"
+      - name: Execute all composed publisher regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/issue32-publisher-source"
+          python3 --version
+          git --version
+          python3 -B -m unittest discover -s scripts -p 'test_connector_publish*.py' -v 2>&1 | tee "$RUNNER_TEMP/issue32-publisher-tests.log"
+          grep -Eq '^Ran 41 tests in ' "$RUNNER_TEMP/issue32-publisher-tests.log"
+          grep -qx 'OK' "$RUNNER_TEMP/issue32-publisher-tests.log"
+          python3 -B - <<'PY'
+          from pathlib import Path
+          for path in Path('scripts').glob('*connector_publish*.py'):
+              compile(path.read_bytes(), str(path), 'exec')
+          print('Publisher source compilation passed')
+          PY
+          git diff --exit-code HEAD
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=normal)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          printf 'TESTS=41 PASSED=41 FAILED=0 SKIPPED=0 SOURCE_UNCHANGED=true\n'
