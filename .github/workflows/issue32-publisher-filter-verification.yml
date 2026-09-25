@@ -54,3 +54,33 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
           printf 'TESTS=41 PASSED=41 FAILED=0 SKIPPED=0 SOURCE_UNCHANGED=true\n'
+  registry-source:
+    if: github.repository_id == '1350979676' && github.ref == 'refs/heads/verify/issue32-publisher-filter-20260924'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions: {}
+    env:
+      EXPECTED_HEAD: 4a7519cdedafbaa416b7edf0cdb8a2084abb4ee6
+      EXPECTED_TREE: 43c63d43bc07afc231dba74423c21ce03d825b02
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - name: Validate exact migrated registry source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/issue32-registry-source"
+          mkdir "$source_dir"
+          git -c core.hooksPath=/dev/null -C "$source_dir" init -q
+          git -c core.hooksPath=/dev/null -C "$source_dir" fetch --depth=1 https://github.com/4444J99/organvm-ci-relay.git "$EXPECTED_HEAD"
+          git -c core.hooksPath=/dev/null -C "$source_dir" checkout --detach FETCH_HEAD
+          cd "$source_dir"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          printf 'SOURCE_HEAD=%s\nSOURCE_TREE=%s\n' "$EXPECTED_HEAD" "$EXPECTED_TREE"
+          node --version
+          node scripts/verify-policy.mjs --candidate-root . --base-root .
+          node scripts/test-policy.mjs --base-root .
+          node scripts/test-registry-boundaries.mjs
+          git diff --exit-code HEAD
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=normal)"
