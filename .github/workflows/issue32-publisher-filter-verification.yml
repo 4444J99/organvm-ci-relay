@@ -1,4 +1,4 @@
-name: Publisher filter-safety diagnostic
+name: Migration fixture repair
 on:
   push:
     branches: [verify/issue32-publisher-filter-20260924]
@@ -8,62 +8,62 @@ concurrency:
   group: issue32-publisher-filter-diagnostic
   cancel-in-progress: false
 jobs:
-  exact-source:
+  fixture-test:
     if: github.repository_id == '1350979676' && github.ref == 'refs/heads/verify/issue32-publisher-filter-20260924'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions: {}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - suite: publisher
-            head: ed977e9679d567545b38e9f6c42f6814b4e7b9ca
-            tree: 9f8e0e4d3f8cba381da75e11786a2720692d9408
-          - suite: registry
-            head: b12ca96b9c2cc7b478ad27ce1268de9694e75b59
-            tree: de231bb1e9b988340b56397f7af11630ee6626b9
     env:
-      EXPECTED_HEAD: ${{ matrix.head }}
-      EXPECTED_TREE: ${{ matrix.tree }}
-      SUITE: ${{ matrix.suite }}
       GIT_TERMINAL_PROMPT: '0'
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - name: Anonymous exact-source verification
+      - name: Verify deterministic repair against migrated and historical registry
         shell: bash
         run: |
           set -euo pipefail
-          source_dir="$RUNNER_TEMP/issue32-source"
-          mkdir "$source_dir"
-          git -c core.hooksPath=/dev/null -C "$source_dir" init -q
-          git -c core.hooksPath=/dev/null -C "$source_dir" fetch --depth=1 https://github.com/4444J99/organvm-ci-relay.git "$EXPECTED_HEAD"
+          curl --fail --silent --show-error --retry 2 --max-time 30 https://raw.githubusercontent.com/4444J99/organvm-ci-relay/c28318935f21e38b3c515199e2fb33bce6bb7a52/scripts/issue32-fixture-repair.py > "$RUNNER_TEMP/repair.py"
+          test "$(git hash-object "$RUNNER_TEMP/repair.py")" = 147e9c1dbb384d0cfaed5da57eb85efce8307af0
+          source_dir="$RUNNER_TEMP/fixture-source"
+          git -c core.hooksPath=/dev/null init -q "$source_dir"
+          git -c core.hooksPath=/dev/null -C "$source_dir" fetch --depth=1 https://github.com/4444J99/organvm-ci-relay.git b12ca96b9c2cc7b478ad27ce1268de9694e75b59
           git -c core.hooksPath=/dev/null -C "$source_dir" checkout --detach FETCH_HEAD
           cd "$source_dir"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
-          printf 'SOURCE_HEAD=%s\nSOURCE_TREE=%s\nSUITE=%s\n' "$EXPECTED_HEAD" "$EXPECTED_TREE" "$SUITE"
-          printf 'DEFINING_WORKFLOW=%s\nDEFINING_SHA=%s\n' "$GITHUB_WORKFLOW_REF" "$GITHUB_SHA"
-          python3 --version
-          git --version
-          node --version
-          case "$SUITE" in
-            publisher)
-              python3 -B -m unittest discover -s scripts -p 'test_connector_publish*.py' -v 2>&1 | tee "$RUNNER_TEMP/tests.log"
-              grep -Eq '^Ran 41 tests in ' "$RUNNER_TEMP/tests.log"
-              grep -qx 'OK' "$RUNNER_TEMP/tests.log"
-              python3 -B -c "from pathlib import Path; [compile(p.read_bytes(), str(p), 'exec') for p in Path('scripts').glob('*connector_publish*.py')]"
-              ;;
-            registry)
-              node scripts/verify-policy.mjs --candidate-root . --base-root .
-              node scripts/test-policy.mjs --base-root .
-              node scripts/test-registry-boundaries.mjs
-              ;;
-            *) exit 2 ;;
-          esac
-          git diff --exit-code HEAD
-          git diff --cached --exit-code
-          test -z "$(git status --porcelain=v1 --untracked-files=normal)"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
-          printf 'SOURCE_UNCHANGED=true\n'
+          test "$(git rev-parse HEAD)" = b12ca96b9c2cc7b478ad27ce1268de9694e75b59
+          test "$(git rev-parse 'HEAD^{tree}')" = de231bb1e9b988340b56397f7af11630ee6626b9
+          python3 -B "$RUNNER_TEMP/repair.py" apply scripts/test-policy.mjs
+          node --check scripts/test-policy.mjs
+          node scripts/verify-policy.mjs --candidate-root . --base-root .
+          node scripts/test-policy.mjs --base-root . | tee "$RUNNER_TEMP/current-policy.log"
+          grep -F 'verified 143 fail-closed relay policy regressions and 5 dynamic policy acceptance cases; 25 embedded receipt runtime cases' "$RUNNER_TEMP/current-policy.log"
+          node --test scripts/test-registry-boundaries.mjs
+          cp config/targets.json "$RUNNER_TEMP/migrated-targets.json"
+          curl --fail --silent --show-error --retry 2 --max-time 30 https://raw.githubusercontent.com/4444J99/organvm-ci-relay/3786142f81e0e1c747bec65a117d052659a79b00/config/targets.json > config/targets.json
+          test "$(git hash-object config/targets.json)" = 5c901d3e747fe2c761d64e169170c014143904de
+          node scripts/test-policy.mjs --base-root . | tee "$RUNNER_TEMP/historical-policy.log"
+          grep -F 'verified 143 fail-closed relay policy regressions and 5 dynamic policy acceptance cases; 25 embedded receipt runtime cases' "$RUNNER_TEMP/historical-policy.log"
+          cp "$RUNNER_TEMP/migrated-targets.json" config/targets.json
+          test "$(git hash-object config/targets.json)" = 1c756c62cfe62ce356f1c4587e778632fc982a44
+          test "$(git diff --name-only HEAD)" = scripts/test-policy.mjs
+          git diff --check
+          git diff --stat
+          printf 'FIXTURE_REPAIR_VERIFIED=true\n'
+  publish-work-branch:
+    needs: fixture-test
+    if: github.repository_id == '1350979676' && github.ref == 'refs/heads/verify/issue32-publisher-filter-20260924'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Fetch independently pinned deterministic publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 2 --max-time 30 https://raw.githubusercontent.com/4444J99/organvm-ci-relay/c28318935f21e38b3c515199e2fb33bce6bb7a52/scripts/issue32-fixture-repair.py > "$RUNNER_TEMP/repair.py"
+          test "$(git hash-object "$RUNNER_TEMP/repair.py")" = 147e9c1dbb384d0cfaed5da57eb85efce8307af0
+      - name: Publish only the exact existing unprotected PR36 work branch
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -B "$RUNNER_TEMP/repair.py" publish
