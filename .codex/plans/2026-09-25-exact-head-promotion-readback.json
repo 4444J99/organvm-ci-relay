@@ -1,0 +1,50 @@
+{
+  "schema": "organvm.relay_promotion_readback.v1",
+  "observed_at": "2026-09-26T01:39:47Z",
+  "owner": "4444J99/organvm-ci-relay#3 and #30",
+  "source_head": "f94a4a6aa328352664686f6fe98b45756be75675",
+  "verification": [
+    {
+      "command": "node scripts/test-policy.mjs",
+      "exit_code": 0,
+      "result": "258 fail-closed policy regressions, 4 dynamic acceptance cases, and 25 embedded receipt runtime cases passed"
+    },
+    {
+      "command": "node scripts/verify-policy.mjs",
+      "exit_code": 0,
+      "result": "6 targets, 6 profiles, zero secrets, pinned actions, exact SHAs, and isolated receipt writes verified"
+    },
+    {
+      "command": "npm test",
+      "cwd": "admission-app",
+      "exit_code": 0,
+      "result": "101 passed, 0 failed"
+    }
+  ],
+  "immutable_admission_artifact": {
+    "tree_id": "9d7aa01a724d6148c565dba21fe0cdf254110bc5",
+    "reproduction_command": "git archive --format=tar.gz --prefix=organvm-relay-admission-app-f94a4a6/ -o organvm-relay-admission-app-f94a4a6.tar.gz f94a4a6aa328352664686f6fe98b45756be75675:admission-app",
+    "archive_bytes": 12936,
+    "archive_sha256": "70d9af00c488a9937dc5be5d5066871609078859e52fad626ee7f6bc7fc4aa1c"
+  },
+  "promotion_gate": {
+    "hosted_check": "Relay trust policy",
+    "observed_result": "failure",
+    "reason": "The candidate changes the deliberately frozen executable trust root.",
+    "required_sequence": [
+      "independently audit one exact candidate SHA",
+      "grant the narrowest temporary administrative bypass",
+      "merge only that SHA",
+      "run the main self-check and protected positive and adversarial canaries",
+      "remove the bypass and verify effective branch protection and rulesets"
+    ],
+    "owner_issue": "https://github.com/4444J99/organvm-ci-relay/issues/3"
+  },
+  "claims_not_made": [
+    "temporary bypass granted",
+    "pull request merged",
+    "admission App deployed or credentialed",
+    "branch protection enabled",
+    "protected canaries accepted"
+  ]
+}
