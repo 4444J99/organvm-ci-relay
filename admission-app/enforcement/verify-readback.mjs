@@ -1,0 +1,28 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const [filename, id] = process.argv.slice(2);
+const appId = Number(id);
+assert.ok(filename && /^[1-9][0-9]*$/.test(id ?? '') && Number.isSafeInteger(appId), 'Usage: node enforcement/verify-readback.mjs READBACK_JSON APP_ID');
+assert.notEqual(appId, 15368, 'GitHub Actions App ID 15368 is a shared producer; a dedicated admission App ID is required.');
+const value = JSON.parse(fs.readFileSync(filename, 'utf8'));
+assert.equal(value.required_status_checks?.strict, true);
+assert.deepEqual(value.required_status_checks.contexts, ['Relay admission / trusted']);
+assert.deepEqual(value.required_status_checks.checks, [{ context: 'Relay admission / trusted', app_id: appId }]);
+assert.equal(value.enforce_admins?.enabled, true);
+const reviews = value.required_pull_request_reviews;
+assert.equal(reviews?.required_approving_review_count, 1);
+assert.equal(reviews.dismiss_stale_reviews, true);
+assert.equal(reviews.require_last_push_approval, true);
+assert.equal(reviews.require_code_owner_reviews, true);
+const bypass = reviews.bypass_pull_request_allowances;
+// Absent/null allowances remain compatible. A present value must be a typed
+// object: Object.values alone silently accepts primitives and nested arrays.
+assert.ok(bypass === undefined || bypass === null || (
+  typeof bypass === 'object' && !Array.isArray(bypass)
+  && Object.entries(bypass).every(([kind, actors]) => (
+    ['users', 'teams', 'apps'].includes(kind) && Array.isArray(actors) && actors.length === 0
+  ))
+), 'Review bypass allowances must contain only empty user, team, and app lists.');
+for (const key of ['required_conversation_resolution', 'required_linear_history']) assert.equal(value[key]?.enabled, true, key);
+for (const key of ['allow_force_pushes', 'allow_deletions', 'lock_branch', 'required_signatures']) assert.equal(value[key]?.enabled, false, key);
+console.log('Branch-protection readback matches expected controls. Effective inherited rules and merge decisions still require inspection.');

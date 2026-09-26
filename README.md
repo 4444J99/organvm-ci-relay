@@ -183,23 +183,26 @@ blocker. Push and manual diagnostics use the separate
 this design has a separately anchored `merge_group` implementation.
 
 GitHub's status-check identity is an app plus a context string, not a workflow
-file identity. A branch with workflow-write access can deliberately create a
-second GitHub Actions job named `Relay trust policy`. The trusted check will
-still fail because the complete workflow tree changed, but duplicate-context
-resolution is GitHub platform behavior. Before relying on the rule, run a live
-adversarial canary and verify that a passing duplicate cannot supersede the
-failing trusted check. If it can, the native context is not a sufficient trust
-anchor; use a workflow-identity-bound ruleset control or a dedicated GitHub App
-check identity. Do not paper over that result in repository code.
+file identity. [Canary #8](https://github.com/4444J99/organvm-ci-relay/pull/8)
+demonstrated a passing candidate-created `Relay trust policy` check alongside
+failing trusted checks, all under the shared GitHub Actions App ID `15368`.
+These are real check results; they do not establish protected merge behavior.
+Requiring that shared identity alone does not authenticate the trusted workflow.
+The duplicate-context resolution is GitHub platform behavior and requires live
+adversarial merge-decision proof.
 
-This PR is the bootstrap: the version of `relay-policy.yml` already on `main`
-uses candidate-controlled `pull_request`, so it cannot authenticate the change
-that replaces it. Bootstrap exactly once by auditing and merging the expected
-head SHA under a narrow administrator bypass. Then let the `main` push
-self-check finish, open a benign data-only PR to exercise the trusted verifier,
-and run frozen-file plus duplicate-name adversarial canaries. Bind a strict
-candidate-head rule only after the separate head-bound publisher exists and
-those checks behave as stated.
+The bootstrap in [PR #4](https://github.com/4444J99/organvm-ci-relay/pull/4)
+merged on September 7, 2026 at `fc21ba4279e9758439c0eac4c8d353e8d3077ba3`.
+Current `main` uses base-controlled `pull_request_target`. September 8 reads at
+`6766fcc70f0c383ca2ddf70e7d6da0cbec7eeafa` still report `protected: false` and
+an empty ruleset collection. Bootstrap completion is not enforcement activation.
+
+[PR #30](https://github.com/4444J99/organvm-ci-relay/pull/30) stages a dedicated
+App producer and strict protection tooling. Its App-only design still has a
+same-head reevaluation gap before asynchronous pending-check creation. Resolve
+that freshness boundary, deployment, protection readback, and live adversarial
+merge decisions before activation. See [admission App](admission-app/README.md)
+and the canonical [settings gate #3](https://github.com/4444J99/organvm-ci-relay/issues/3).
 
 After bootstrap, executable trust-root changes fail by design. For a necessary
 workflow, verifier, test, launcher, profile implementation or metadata, or governing Git
